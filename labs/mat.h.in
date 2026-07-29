@@ -1,0 +1,50 @@
+/*
+ * Chapter 4 scaffold: a matrix is a pointer and a shape.
+ *
+ * Mat never owns the floats. Complete the four small view helpers below.
+ */
+#ifndef TINY_AGENC_MAT_H
+#define TINY_AGENC_MAT_H
+
+#include <assert.h>
+#include <stddef.h>
+
+typedef struct {
+    float *vals;
+    int    rows;
+    int    cols;
+} Mat;
+
+static inline Mat mat_make(float *vals, int rows, int cols)
+{
+    /* TODO: preserve the pointer and both dimensions. */
+    Mat unfinished = { vals, 0, 0 };
+
+    (void)rows;
+    (void)cols;
+    return unfinished;
+}
+
+static inline float *mat_row(Mat m, int row)
+{
+    /* TODO: assert the bound and return the row-major offset. */
+    (void)m;
+    (void)row;
+    return NULL;
+}
+
+static inline size_t mat_size(Mat m)
+{
+    /* TODO: return the number of visible floats. */
+    (void)m;
+    return 0;
+}
+
+static inline Mat mat_first_rows(Mat m, int rows)
+{
+    /* TODO: assert the bound and return a shorter view of the same storage. */
+    (void)rows;
+    return m;
+}
+
+#endif

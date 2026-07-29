@@ -1,0 +1,3783 @@
+{
+ "_comment": "Concept graph for the book. owner = numbered chapter or appendix that teaches it (build-then-name). previews = earlier book units allowed to use it with a gloss + pointer. depends_on = concepts its OWNER-level definition uses. aliases = word-boundary regexes for the use-before-teach scan; scan=false skips scanning (too common a word). Maintained per AGENTS.md P6; checked by scripts/check-graph.py.",
+ "concepts": {
+  "character": {
+   "owner": 0,
+   "depends_on": [],
+   "definition": "one byte of ASCII text",
+   "aliases": [],
+   "scan": false,
+   "intuition": "one ASCII byte such as a letter, digit, or space; other encodings may need several bytes for one displayed character",
+   "anchor": "self"
+  },
+  "id": {
+   "owner": 3,
+   "previews": {
+    "1": "position in the sorted 80-character alphabet"
+   },
+   "depends_on": [
+    "token",
+    "vocabulary"
+   ],
+   "definition": "the zero-based integer label assigned to one vocabulary token value",
+   "aliases": [],
+   "scan": false,
+   "intuition": "the compact number written beside one entry in the sorted alphabet",
+   "anchor": "self"
+  },
+  "token": {
+   "owner": 3,
+   "previews": {
+    "0": "one ASCII byte = one character = one token here; general encodings can differ",
+    "1": "Chapter 3's later name for one piece of text that receives an id; one character here"
+   },
+   "depends_on": [
+    "character"
+   ],
+   "definition": "a chunk of text treated as one indivisible model input; exactly one ASCII byte here",
+   "aliases": [
+    "token",
+    "tokens"
+   ],
+   "intuition": "each ASCII byte occurrence is one model-sized piece; repeated byte values reuse the same id",
+   "anchor": "self"
+  },
+  "vocabulary": {
+   "owner": 3,
+   "previews": {
+    "0": "80 distinct characters",
+    "1": "alphabet table row V"
+   },
+   "depends_on": [
+    "token"
+   ],
+   "definition": "the set of distinct token values the model can represent",
+   "aliases": [
+    "vocabulary",
+    "vocab"
+   ],
+   "intuition": "the model's complete alphabet, with each distinct byte including space and newline written once",
+   "anchor": "self"
+  },
+  "corpus": {
+   "owner": 3,
+   "previews": {
+    "0": "the training text: NIGHT GRID, with Chapter 3 as the construction",
+    "1": "the text whose next characters supply the answers"
+   },
+   "depends_on": [
+    "character"
+   ],
+   "definition": "a deliberately selected body of text used to supply training examples",
+   "aliases": [
+    "corpus",
+    "corpora"
+   ],
+   "intuition": "NIGHT GRID repeats headers, handles, and slang inside the 128-character span the model can study",
+   "anchor": "self"
+  },
+  "command-environment-assignment": {
+   "owner": 3,
+   "depends_on": [],
+   "definition": "a shell NAME=value prefix that supplies one environment variable to the following command only",
+   "aliases": [
+    "command environment assignment",
+    "command environment assignments"
+   ],
+   "intuition": "give one make invocation a larger target or give one tr invocation the C locale without changing later commands",
+   "anchor": "self"
+  },
+  "shell-variable-assignment": {
+   "owner": 3,
+   "depends_on": [],
+   "definition": "a standalone shell NAME=value line that keeps the value available to later lines in that shell",
+   "aliases": [
+    "shell variable assignment",
+    "shell variable assignments"
+   ],
+   "intuition": "store the header pattern once, then expand it into AWK's -v argument later",
+   "anchor": "self"
+  },
+  "whitelist": {
+   "owner": 3,
+   "previews": {
+    "0": "NIGHT GRID cleaning admits only permitted forms; Chapter 3 builds the exact rules"
+   },
+   "depends_on": [],
+   "definition": "an admission rule that starts empty and keeps only explicitly permitted forms",
+   "aliases": [
+    "whitelist",
+    "allowlist"
+   ],
+   "intuition": "begin with empty output and let text through only when an accepted rule admits it",
+   "anchor": "self"
+  },
+  "corpus-grammar": {
+   "owner": 3,
+   "previews": {
+    "0": "generated NIGHT GRID text is distilled through a grammar whitelist; Chapter 3 builds the accepted shapes"
+   },
+   "depends_on": [
+    "character",
+    "corpus",
+    "whitelist"
+   ],
+   "definition": "a stateful whitelist that emits only complete accepted scenes and caps repeated dialogue",
+   "aliases": [
+    "corpus grammar",
+    "grammar whitelist",
+    "whitelist grammar"
+   ],
+   "intuition": "hold a valid header until dialogue proves the scene complete, reset on a malformed header, and reject the fourth identical dialogue copy",
+   "anchor": "self"
+  },
+  "tokenization": {
+   "owner": 3,
+   "previews": {
+    "1": "characters converted into compact integer ids; Chapter 3 builds the mapping"
+   },
+   "depends_on": [
+    "id",
+    "token",
+    "vocabulary"
+   ],
+   "definition": "convert a sequence of text tokens into vocabulary ids",
+   "aliases": [
+    "tokenization"
+   ],
+   "intuition": "replace each known byte occurrence with the compact number assigned to its value",
+   "anchor": "self"
+  },
+  "tokenizer": {
+   "owner": 3,
+   "previews": {
+    "1": "object that maps known bytes to ids and valid ids back to bytes"
+   },
+   "depends_on": [
+    "id",
+    "tokenization",
+    "vocabulary"
+   ],
+   "definition": "the object that owns both the token-to-id and id-to-token mappings",
+   "aliases": [
+    "tokenizer",
+    "tokenizers"
+   ],
+   "intuition": "write the sorted alphabet once, then use one table in each direction",
+   "anchor": "self"
+  },
+  "subword-token": {
+   "owner": 3,
+   "previews": {
+    "1": "production models often assign one id to a multi-character word piece"
+   },
+   "depends_on": [
+    "token",
+    "tokenization"
+   ],
+   "definition": "one indivisible model token that contains a recurring sequence of text bytes",
+   "aliases": [
+    "subword token",
+    "subword tokens"
+   ],
+   "intuition": "giving th one id turns the seven byte tokens in the the into five token positions",
+   "anchor": "self"
+  },
+  "serialization": {
+   "owner": 3,
+   "depends_on": [
+    "fixed-width-integer",
+    "native-byte-order",
+    "tokenizer"
+   ],
+   "definition": "turn in-memory state into an ordered byte representation and reconstruct it later",
+   "aliases": [
+    "serialization",
+    "serialize",
+    "serialized",
+    "serializes"
+   ],
+   "intuition": "write the tokenizer count followed by its sorted id-to-byte alphabet, then rebuild the same two tables",
+   "anchor": "self"
+  },
+  "training-split": {
+   "owner": 3,
+   "depends_on": [
+    "bounded-random",
+    "corpus",
+    "seed",
+    "step"
+   ],
+   "definition": "the complete corpus records assigned to model updates by a seeded partition",
+   "aliases": [
+    "training split",
+    "training splits"
+   ],
+   "intuition": "shuffle whole transmissions reproducibly, then let only the unmarked records shape the model",
+   "anchor": "no-peeking"
+  },
+  "validation-split": {
+   "owner": 3,
+   "depends_on": [
+    "corpus",
+    "training-split",
+    "step"
+   ],
+   "definition": "the complementary complete records withheld from model updates for later checks",
+   "aliases": [
+    "validation split",
+    "validation splits"
+   ],
+   "intuition": "keep the marked whole transmissions behind the no-peeking boundary and check them later",
+   "anchor": "no-peeking"
+  },
+  "data-leakage": {
+   "owner": 3,
+   "depends_on": [
+    "corpus",
+    "tokenizer",
+    "training-split",
+    "validation-split"
+   ],
+   "definition": "held-out information influencing training data or training setup",
+   "aliases": [
+    "data leakage"
+   ],
+   "intuition": "keep each transmission on one side and build the alphabet from training bytes; canonical global cleaning still happens before this boundary",
+   "anchor": "no-peeking"
+  },
+  "dataset": {
+   "owner": 3,
+   "previews": {
+    "0": "the model's prepared training text; Chapter 3 builds its encoded form",
+    "1": "the module that turns corpus text into shifted input and target rows"
+   },
+   "depends_on": [
+    "corpus",
+    "ownership-lifetime",
+    "tokenization"
+   ],
+   "definition": "an owned array of corpus token ids from which training windows are drawn",
+   "aliases": [
+    "dataset",
+    "datasets"
+   ],
+   "intuition": "a deck of numbered text whose overlapping windows can be dealt as training flashcards",
+   "anchor": "flashcards"
+  },
+  "next-token-pair": {
+   "owner": 3,
+   "previews": {
+    "1": "each input position paired with the character immediately after it"
+   },
+   "depends_on": [
+    "dataset",
+    "token"
+   ],
+   "definition": "one input token id paired with the immediately following target token id",
+   "aliases": [
+    "next-token pair",
+    "next-token pairs"
+   ],
+   "intuition": "each position on the front of a flashcard lines up with its one-token-later answer on the back",
+   "anchor": "flashcards"
+  },
+  "sampling-with-replacement": {
+   "owner": 3,
+   "depends_on": [
+    "bounded-random",
+    "dataset",
+    "next-token-pair"
+   ],
+   "definition": "draw each legal dataset window without removing earlier choices",
+   "aliases": [
+    "sampling with replacement"
+   ],
+   "intuition": "return each flashcard to the deck after drawing it, so the same starting position may appear again",
+   "anchor": "flashcards"
+  },
+  "buffer-capacity": {
+   "owner": 3,
+   "depends_on": [
+    "allocation",
+    "pointer"
+   ],
+   "definition": "the number of elements a caller has made writable behind a destination pointer",
+   "aliases": [
+    "buffer capacity",
+    "buffer capacities"
+   ],
+   "intuition": "a pointer carries an address, not a length; encoding needs length slots and batching needs B times T slots in each destination",
+   "anchor": "self"
+  },
+  "undefined-behavior": {
+   "owner": 3,
+   "depends_on": [],
+   "definition": "a C execution outside the language's guarantees, for which no result is promised",
+   "aliases": [
+    "undefined behavior"
+   ],
+   "intuition": "a write past the last allocated slot may damage another object or appear to work and fail later",
+   "anchor": "self"
+  },
+  "array-parameter": {
+   "owner": 3,
+   "depends_on": [
+    "const-qualification",
+    "pointer"
+   ],
+   "definition": "a C function parameter written as T values[N] that the language adjusts to a T pointer without checking N",
+   "aliases": [
+    "array parameter",
+    "array parameters"
+   ],
+   "intuition": "the 256 in seen[256] documents the borrowed row, but the caller still supplies all 256 elements",
+   "anchor": "self"
+  },
+  "logical-not": {
+   "owner": 3,
+   "depends_on": [],
+   "definition": "the C ! operator maps zero to true and every nonzero value to false",
+   "aliases": [
+    "logical NOT"
+   ],
+   "intuition": "!0 is 1 while !1 is 0, so !seen selects an unseen byte",
+   "anchor": "self"
+  },
+  "pointer-arithmetic": {
+   "owner": 3,
+   "depends_on": [
+    "pointer"
+   ],
+   "definition": "within one array, adding n to a typed pointer advances by n objects; one-past may be formed but not read",
+   "aliases": [
+    "pointer arithmetic"
+   ],
+   "intuition": "adding five to the dataset pointer reaches source position five; the legal-start proof keeps every read inside the token array",
+   "anchor": "self"
+  },
+  "byte-copy": {
+   "owner": 3,
+   "depends_on": [
+    "buffer-capacity",
+    "ownership-lifetime",
+    "pointer-arithmetic",
+    "sizeof"
+   ],
+   "definition": "memcpy copies a stated number of bytes between valid non-overlapping memory regions",
+   "aliases": [
+    "byte copy",
+    "byte copies",
+    "memcpy"
+   ],
+   "intuition": "point at the first integer slot, then copy block_size times the byte size of one integer",
+   "anchor": "self"
+  },
+  "byte-fill": {
+   "owner": 5,
+   "depends_on": [
+    "buffer-capacity",
+    "float-precision",
+    "pointer",
+    "size-t"
+   ],
+   "definition": "memset repeats one byte value across a stated number of writable bytes; on the supported IEEE 754 machines, all-zero bytes represent float zero",
+   "aliases": [
+    "byte fill",
+    "byte fills",
+    "memset"
+   ],
+   "intuition": "write zero into every byte of one output slice before adding weighted value rows into it",
+   "anchor": "consulting"
+  },
+  "row-major-storage": {
+   "owner": 4,
+   "depends_on": [
+    "matrix",
+    "shape"
+   ],
+   "definition": "a flat matrix layout in which one row's columns occupy consecutive elements and the next row follows immediately",
+   "aliases": [
+    "row-major",
+    "row major"
+   ],
+   "intuition": "in a two-by-three grid, row zero uses offsets zero through two and row one begins at offset three",
+   "anchor": "self"
+  },
+  "mat": {
+   "owner": 4,
+   "previews": {
+    "1": "Mat = pointer + rows + columns; Chapter 4 builds the small public description"
+   },
+   "depends_on": [
+    "pointer",
+    "shape",
+    "value-type"
+   ],
+   "definition": "a three-field C value containing a float-storage pointer plus row and column counts",
+   "aliases": [
+    "Mat"
+   ],
+   "intuition": "copy the three-field description while the float array stays at its original address",
+   "anchor": "self"
+  },
+  "matrix-view": {
+   "owner": 4,
+   "previews": {
+    "1": "a Mat is pointer + rows + columns, a view and never an owner"
+   },
+   "depends_on": [
+    "mat",
+    "ownership-lifetime"
+   ],
+   "definition": "a Mat description that borrows existing float storage without allocating, freeing, or copying the float payload",
+   "aliases": [
+    "view",
+    "views",
+    "matrix view",
+    "matrix views",
+    "non-owning view",
+    "non-owning views"
+   ],
+   "scan": false,
+   "intuition": "one float array keeps one owner while several copied descriptions expose it",
+   "anchor": "self"
+  },
+  "leading-row-view": {
+   "owner": 4,
+   "depends_on": [
+    "matrix-view",
+    "row-major-storage"
+   ],
+   "definition": "a new Mat with the same base pointer and column count and a visible row count no greater than its parent",
+   "aliases": [
+    "leading-row view",
+    "leading-row views"
+   ],
+   "intuition": "a three-by-four parent and two-by-four prefix begin at the same float, so a write through the prefix reaches the parent",
+   "anchor": "self"
+  },
+  "row-stride": {
+   "owner": 4,
+   "depends_on": [
+    "row-major-storage",
+    "shape"
+   ],
+   "definition": "the element distance between starts of adjacent logical rows, equal to the column count for Mat storage",
+   "aliases": [
+    "row stride",
+    "stride"
+   ],
+   "intuition": "a four-column row advances the float pointer by four to reach the next row",
+   "anchor": "self"
+  },
+  "reshape-view": {
+   "owner": 4,
+   "depends_on": [
+    "buffer-capacity",
+    "matrix-view",
+    "row-stride"
+   ],
+   "definition": "a new rows-by-columns description of the same storage without moving values, valid only when the backing capacity and packing fit",
+   "aliases": [
+    "reshape",
+    "reshapes",
+    "reshape view",
+    "reshape views"
+   ],
+   "intuition": "the first four floats of a four-by-four buffer can be read as two packed rows of width two, changing the second row's start",
+   "anchor": "self"
+  },
+  "header-guard": {
+   "owner": 4,
+   "depends_on": [
+    "preprocessor-macro"
+   ],
+   "definition": "a preprocessor condition around a header body that skips repeated definitions after the first inclusion",
+   "aliases": [
+    "header guard",
+    "header guards"
+   ],
+   "intuition": "the first include defines a marker and reads the body; later includes see the marker and skip the body",
+   "anchor": "self"
+  },
+  "static-inline-header-helper": {
+   "owner": 4,
+   "depends_on": [
+    "file-private-static"
+   ],
+   "definition": "a function body placed in a header with a private definition for each including C file and an inline specifier that does not determine whether calls are substituted",
+   "aliases": [
+    "static inline"
+   ],
+   "intuition": "each C file gets its own tiny Mat helper, whether the compiler keeps a call or substitutes the helper body",
+   "anchor": "self"
+  },
+  "positional-struct-initializer": {
+   "owner": 4,
+   "depends_on": [
+    "struct"
+   ],
+   "definition": "a brace list that initializes struct fields in their declaration order",
+   "aliases": [
+    "positional struct initializer"
+   ],
+   "intuition": "the three values vals, rows, and cols enter the three Mat fields in that same declared order",
+   "anchor": "self"
+  },
+  "struct-member-access": {
+   "owner": 2,
+   "depends_on": [
+    "struct"
+   ],
+   "definition": "the C dot operator selecting one named field directly from a struct value",
+   "aliases": [
+    "struct member access"
+   ],
+   "intuition": "now.tv_sec selects the whole-second field while now.tv_nsec selects the remaining nanoseconds",
+   "anchor": "self"
+  },
+  "array-to-pointer-conversion": {
+   "owner": 3,
+   "depends_on": [
+    "pointer"
+   ],
+   "definition": "the usual C conversion of an array expression to a pointer to its first element, including when passed as a function argument",
+   "aliases": [
+    "array-to-pointer conversion"
+   ],
+   "intuition": "passing seen supplies &seen[0] while the 256-element array itself stays in tokenizer_new",
+   "anchor": "self"
+  },
+  "loss": {
+   "owner": 5,
+   "previews": {
+    "0": "grade for next-character guesses on one selected group of snippets; not a running average",
+    "1": "one grade for all known next-character answers in a batch; lower is better and reports may bounce"
+   },
+   "depends_on": [
+    "cross-entropy"
+   ],
+   "definition": "the single scalar returned by the grading rule; here, the batch mean cross-entropy",
+   "aliases": [
+    "loss"
+   ],
+   "intuition": "one group's grade for the next-character bets; lower is better, and reports may bounce",
+   "anchor": "bet-sheet"
+  },
+  "parameter": {
+   "owner": 0,
+   "depends_on": [],
+   "definition": "one of the model's adjustable numbers",
+   "aliases": [
+    "parameter",
+    "parameters"
+   ],
+   "intuition": "one of the 815,360 adjustable numbers; training is nudging them",
+   "anchor": "self"
+  },
+  "parameter-initialization": {
+   "owner": 1,
+   "previews": {
+    "0": "deliberate starting values: random weights and neutral multipliers and additions; Chapter 1 catalogs the recipe"
+   },
+   "depends_on": [
+    "parameter"
+   ],
+   "definition": "the deliberate starting value assigned to every parameter before training",
+   "aliases": [
+    "initialization",
+    "initializer"
+   ],
+   "intuition": "before the corpus teaches anything, set most adjustable numbers near zero while learned multipliers start at one and additions start at zero",
+   "anchor": "self"
+  },
+  "transformer": {
+   "owner": 1,
+   "previews": {
+    "0": "name for the complete machine; Chapter 1 provides the map"
+   },
+   "depends_on": [
+    "block",
+    "notes-row"
+   ],
+   "definition": "the complete route from opening rows of notes, through repeated consult-and-edit blocks, to next-character scores",
+   "aliases": [
+    "transformer",
+    "transformers"
+   ],
+   "intuition": "rows of notes move through editing blocks until each row can produce next-character scores",
+   "anchor": "notes"
+  },
+  "decoder-only": {
+   "owner": 1,
+   "previews": {
+    "0": "label for the finished machine; Chapter 1 builds the one-stack distinction"
+   },
+   "depends_on": [
+    "transformer",
+    "autoregressive"
+   ],
+   "definition": "a transformer with one preceding-text-to-next-character stack and no separate stack reading another source sequence",
+   "aliases": [
+    "decoder-only",
+    "decoder only",
+    "decoder-only transformer"
+   ],
+   "intuition": "one stack revises the notes for the text seen so far; there is no second source-reading stack",
+   "anchor": "notes"
+  },
+  "forward-pass": {
+   "owner": 1,
+   "previews": {
+    "0": "one run from input token ids to next-character predictions"
+   },
+   "depends_on": [
+    "transformer",
+    "loss"
+   ],
+   "definition": "one call that carries input ids through the transformer to next-character scores and, when answers are supplied, continues through grading",
+   "aliases": [
+    "forward pass",
+    "forward passes"
+   ],
+   "intuition": "training and generation call the same score route; only the training call supplies answers for the optional grade",
+   "anchor": "notes"
+  },
+  "weight": {
+   "owner": 1,
+   "depends_on": [
+    "parameter",
+    "attention-weight"
+   ],
+   "definition": "synonym for a learned parameter; distinct from a temporary attention mixing weight",
+   "aliases": [],
+   "scan": false,
+   "intuition": "a learned weight survives between passes; an attention weight is recomputed for one pass",
+   "anchor": "self"
+  },
+  "step": {
+   "owner": 1,
+   "previews": {
+    "0": "one of 5,000 training rounds in the printout; Chapter 1 maps what one round must do"
+   },
+   "depends_on": [
+    "batch",
+    "parameter",
+    "forward-pass",
+    "loss",
+    "backpropagation",
+    "optimizer"
+   ],
+   "definition": "one batch, one grade, one backward calculation, and one visit to the parameter updater",
+   "aliases": [],
+   "scan": false,
+   "intuition": "draw known text, erase old correction signals, predict and grade, send corrections backward, then adjust parameters",
+   "anchor": "self"
+  },
+  "matrix": {
+   "owner": 1,
+   "depends_on": [],
+   "definition": "grid of numbers with shape rows x columns",
+   "aliases": [
+    "matrix",
+    "matrices"
+   ],
+   "intuition": "the three-position by four-channel notes grid",
+   "anchor": "self"
+  },
+  "shape": {
+   "owner": 1,
+   "depends_on": [
+    "matrix"
+   ],
+   "definition": "rows by columns, always in that order",
+   "aliases": [],
+   "scan": false,
+   "intuition": "rows by columns, always in that order",
+   "anchor": "self"
+  },
+  "channel": {
+   "owner": 1,
+   "depends_on": [
+    "matrix"
+   ],
+   "definition": "a column index; one slot of a position's notes",
+   "aliases": [
+    "channel",
+    "channels"
+   ],
+   "intuition": "one vertical note slot across every position row; a column index, nothing more",
+   "anchor": "notes"
+  },
+  "notes-row": {
+   "owner": 1,
+   "depends_on": [
+    "matrix",
+    "channel",
+    "token"
+   ],
+   "definition": "the model's running notes about one text position; a token's state",
+   "aliases": [],
+   "scan": false,
+   "intuition": "the model's running notes about one position, revised block by block",
+   "anchor": "notes"
+  },
+  "batch": {
+   "owner": 1,
+   "depends_on": [],
+   "definition": "a group of sequences graded together; B is the configured maximum",
+   "aliases": [
+    "batch",
+    "batches"
+   ],
+   "intuition": "several snippets graded together so one nudge draws on many corpus places",
+   "anchor": "self"
+  },
+  "context-length": {
+   "owner": 1,
+   "depends_on": [
+    "token"
+   ],
+   "definition": "T, the configured maximum positions per sequence and hard ceiling on lookback",
+   "aliases": [
+    "context length"
+   ],
+   "intuition": "the furthest back the model can ever look: 128 characters",
+   "anchor": "self"
+  },
+  "model-configuration": {
+   "owner": 1,
+   "depends_on": [
+    "batch",
+    "context-length",
+    "head-size",
+    "shape",
+    "vocabulary"
+   ],
+   "definition": "the public six-integer ModelConfig value that carries V, T, C, H, L, and B together",
+   "aliases": [
+    "ModelConfig",
+    "model configuration"
+   ],
+   "intuition": "one copyable value keeps all six capacities together so every module receives the same geometry",
+   "anchor": "self"
+  },
+  "model-configuration-validity": {
+   "owner": 1,
+   "depends_on": [
+    "model-configuration"
+   ],
+   "definition": "the geometry predicate requiring positive bounded V, T, C, H, L, and B, B*T within its row ceiling, and C divisible by H",
+   "aliases": [
+    "configuration validity",
+    "model_config_valid"
+   ],
+   "intuition": "test positive bounds, row capacity, and equal head division before any storage size is considered",
+   "anchor": "self"
+  },
+  "flattening": {
+   "owner": 1,
+   "depends_on": [
+    "batch",
+    "context-length",
+    "matrix"
+   ],
+   "definition": "a full-capacity B x T x C batch stored as (B*T) x C = R x C",
+   "aliases": [
+    "flatten",
+    "flattens",
+    "flattening"
+   ],
+   "intuition": "stack the B note-grids into one tall grid; bookkeeping, not a merge",
+   "anchor": "notes"
+  },
+  "vector": {
+   "owner": 5,
+   "depends_on": [
+    "matrix"
+   ],
+   "definition": "an ordered list of numbers read as one row",
+   "aliases": [
+    "vector",
+    "vectors"
+   ],
+   "intuition": "one short row such as [1, 2, 3], with each number kept in its numbered slot",
+   "anchor": "self"
+  },
+  "scaled-accumulation": {
+   "owner": 5,
+   "depends_on": [
+    "vector"
+   ],
+   "definition": "add a scalar multiple of one vector into another, out[i] += scale * values[i]",
+   "aliases": [
+    "scaled accumulation",
+    "scaled accumulate",
+    "AXPY"
+   ],
+   "intuition": "multiply every incoming entry by one scale, then add each result into the matching output slot",
+   "anchor": "self"
+  },
+  "residual-stream": {
+   "owner": 5,
+   "previews": {
+    "0": "parts list",
+    "1": "the rows of notes amended, never replaced, by each block"
+   },
+   "depends_on": [
+    "notes-row"
+   ],
+   "definition": "the per-position state that blocks add corrections onto",
+   "aliases": [
+    "residual stream",
+    "residual streams"
+   ],
+   "intuition": "these very rows of notes as they flow through the model",
+   "anchor": "notes"
+  },
+  "residual-addition": {
+   "owner": 5,
+   "previews": {
+    "1": "add the outcome back onto the stream"
+   },
+   "depends_on": [
+    "residual-stream",
+    "vector"
+   ],
+   "definition": "out = a + b elementwise; the highway mechanism",
+   "aliases": [
+    "residual addition",
+    "residual connection",
+    "residual connections"
+   ],
+   "intuition": "each block's output is an edit added on; part of every training signal crosses untouched",
+   "anchor": "highway"
+  },
+  "attention": {
+   "owner": 5,
+   "previews": {
+    "0": "parts list",
+    "1": "ask, advertise, average across visible positions"
+   },
+   "depends_on": [
+    "query-key-value",
+    "scaled-dot-product",
+    "softmax",
+    "attention-weight",
+    "weighted-average",
+    "causality"
+   ],
+   "definition": "score each query against visible keys, turn the scores into attention weights, and use those weights to average the values",
+   "aliases": [
+    "attention",
+    "self-attention"
+   ],
+   "intuition": "the one step where positions consult each other: ask, advertise, average",
+   "anchor": "consulting"
+  },
+  "query-key-value": {
+   "owner": 5,
+   "previews": {
+    "1": "question, advertisement, cargo"
+   },
+   "depends_on": [
+    "notes-row",
+    "vector",
+    "matmul"
+   ],
+   "definition": "three vectors per position produced together by one matmul: a query to match, a key to match against, and a value to carry",
+   "aliases": [
+    "query",
+    "queries",
+    "key",
+    "keys",
+    "value",
+    "values",
+    "qkv"
+   ],
+   "scan": false,
+   "intuition": "question, advertisement, cargo",
+   "anchor": "consulting"
+  },
+  "scaled-dot-product": {
+   "owner": 5,
+   "depends_on": [
+    "dot-product",
+    "independence",
+    "mean-variance",
+    "vector"
+   ],
+   "definition": "the dot product of two equal-length vectors divided by the square root of their length",
+   "aliases": [
+    "scaled dot product",
+    "scaled-dot product",
+    "scaled dot products",
+    "scaled-dot products"
+   ],
+   "intuition": "divide a query-key score by the spread that grows with the square root of the row width",
+   "anchor": "consulting"
+  },
+  "attention-weight": {
+   "owner": 5,
+   "previews": {
+    "1": "one temporary mixing share assigned to a visible position"
+   },
+   "depends_on": [
+    "probability-distribution",
+    "softmax"
+   ],
+   "definition": "one softmax probability assigned to a visible position's value",
+   "aliases": [
+    "attention weight",
+    "attention weights"
+   ],
+   "intuition": "the share of the answer borrowed from one visible position's cargo",
+   "anchor": "consulting"
+  },
+  "weighted-average": {
+   "owner": 5,
+   "previews": {
+    "1": "mix visible value rows using non-negative shares that sum to one"
+   },
+   "depends_on": [
+    "probability-distribution",
+    "scaled-accumulation",
+    "vector"
+   ],
+   "definition": "sum vectors after multiplying each by a non-negative weight, where all weights sum to one",
+   "aliases": [
+    "weighted average",
+    "weighted-average",
+    "weighted averages",
+    "weighted-averages"
+   ],
+   "intuition": "each consulted position contributes its assigned share of cargo to the output",
+   "anchor": "consulting"
+  },
+  "head": {
+   "owner": 5,
+   "previews": {
+    "0": "parts list",
+    "1": "independent copy of attention on a 32-channel slice"
+   },
+   "depends_on": [
+    "attention",
+    "channel"
+   ],
+   "definition": "one of H attention computations confined to its own channel slice",
+   "aliases": [],
+   "scan": false,
+   "intuition": "one independent copy of the consulting routine on its own 32-channel slice",
+   "anchor": "consulting"
+  },
+  "head-size": {
+   "owner": 1,
+   "depends_on": [
+    "channel"
+   ],
+   "definition": "C/H, the equal channel count assigned to each attention group",
+   "aliases": [
+    "head size",
+    "head_size"
+   ],
+   "intuition": "split four toy channels into two equal groups of two; the default split is 128 into four groups of 32",
+   "anchor": "consulting"
+  },
+  "block": {
+   "owner": 1,
+   "depends_on": [
+    "notes-row",
+    "causality",
+    "channel"
+   ],
+   "definition": "the repeated unit that adds one edit made by consulting visible rows and a second edit made within each row",
+   "aliases": [],
+   "scan": false,
+   "intuition": "one stage gives the continuing notes two edits: consult earlier rows and then work within each row",
+   "anchor": "notes"
+  },
+  "pre-norm": {
+   "owner": 1,
+   "depends_on": [
+    "block",
+    "notes-row"
+   ],
+   "definition": "prepare a steadied copy before each block branch, then add the branch's edit to the unmodified continuing state",
+   "aliases": [
+    "pre-norm"
+   ],
+   "intuition": "the editor reads a steadied copy while the original notes continue along the highway",
+   "anchor": "notes"
+  },
+  "autoregressive": {
+   "owner": 1,
+   "previews": {
+    "0": "choose one character, append it, and run again; Chapter 1 builds the loop"
+   },
+   "depends_on": [
+    "token"
+   ],
+   "definition": "write one token at a time, feed it back, and choose again from the preceding context available to the model",
+   "aliases": [
+    "autoregressive"
+   ],
+   "intuition": "during a generation call, choose one character, append it to the visible text, and predict again without adjusting parameters",
+   "anchor": "bet-sheet"
+  },
+  "causality": {
+   "owner": 1,
+   "previews": {
+    "0": "name in the parts list; Chapter 1 builds the no-peeking rule"
+   },
+   "depends_on": [
+    "autoregressive",
+    "next-token-pair"
+   ],
+   "definition": "a prediction at position t may depend only on positions 0 through t, never later positions",
+   "aliases": [
+    "causality",
+    "causal"
+   ],
+   "intuition": "no peeking: the next character is the very answer the bet is graded on",
+   "anchor": "no-peeking"
+  },
+  "probability-distribution": {
+   "owner": 5,
+   "previews": {
+    "1": "bet sheet: 80 non-negative numbers summing to 1",
+    "0": "route preview: next-character probabilities, with Chapter 5 as the construction"
+   },
+   "depends_on": [
+    "vector"
+   ],
+   "definition": "one non-negative number per possible choice, with all of the numbers summing to one",
+   "aliases": [
+    "probability",
+    "probabilities",
+    "bet sheet"
+   ],
+   "intuition": "the bet sheet: 80 non-negative numbers that sum to 1",
+   "anchor": "bet-sheet"
+  },
+  "logits": {
+   "owner": 5,
+   "previews": {
+    "1": "raw scores before softmax"
+   },
+   "depends_on": [
+    "vocabulary",
+    "vector"
+   ],
+   "definition": "one unconstrained raw score per vocabulary entry and position",
+   "aliases": [
+    "logits"
+   ],
+   "intuition": "the raw scores before they are squashed into a bet sheet",
+   "anchor": "bet-sheet"
+  },
+  "softmax": {
+   "owner": 5,
+   "previews": {
+    "1": "squashing machinery, scores to probabilities"
+   },
+   "depends_on": [
+    "probability-distribution",
+    "exponential",
+    "vector"
+   ],
+   "definition": "subtract a score row's maximum, exponentiate each shifted score, then divide by their sum to make a distribution",
+   "aliases": [
+    "softmax",
+    "softmaxes"
+   ],
+   "intuition": "the squashing machinery that turns scores into a bet sheet",
+   "anchor": "bet-sheet"
+  },
+  "softmax-saturation": {
+   "owner": 5,
+   "depends_on": [
+    "softmax"
+   ],
+   "definition": "as score gaps grow, softmax probabilities crowd toward one for the winner and zero for the others",
+   "aliases": [
+    "saturation",
+    "softmax saturation"
+   ],
+   "intuition": "a score far ahead takes nearly the whole bet sheet and leaves almost no share for the rest",
+   "anchor": "bet-sheet"
+  },
+  "log-sum-exp": {
+   "owner": 5,
+   "depends_on": [
+    "exponential",
+    "logarithm",
+    "vector"
+   ],
+   "definition": "maximum + log(sum(exp(score[i] - maximum))), an overflow-resistant way to compute the log of summed exponentials",
+   "aliases": [
+    "log-sum-exp"
+   ],
+   "intuition": "subtract the tallest score before exponentiating, then put that shared height back after the logarithm",
+   "anchor": "self"
+  },
+  "cross-entropy": {
+   "owner": 5,
+   "previews": {
+    "1": "grades the batch with one number"
+   },
+   "depends_on": [
+    "batch",
+    "logarithm",
+    "next-token-pair",
+    "probability-distribution"
+   ],
+   "definition": "the batch mean of -log(probability assigned to each correct next token)",
+   "aliases": [
+    "cross-entropy"
+   ],
+   "intuition": "one number grading the batch: the penalty for weak bets on the truth",
+   "anchor": "bet-sheet"
+  },
+  "embedding": {
+   "owner": 5,
+   "previews": {
+    "0": "parts list",
+    "1": "id fetches its learned row; plus a position row"
+   },
+   "depends_on": [
+    "id",
+    "matrix",
+    "notes-row",
+    "parameter",
+    "position-table",
+    "vector"
+   ],
+   "definition": "look up one learned token vector by id and add the learned vector for that position to make the starting notes",
+   "aliases": [
+    "embedding",
+    "embeddings"
+   ],
+   "intuition": "each id fetches its learned row: the position's opening notes, identity plus location",
+   "anchor": "notes"
+  },
+  "position-table": {
+   "owner": 5,
+   "previews": {
+    "1": "T x C learned rows, one per position"
+   },
+   "depends_on": [
+    "context-length",
+    "matrix",
+    "parameter",
+    "vector"
+   ],
+   "definition": "a learned table with one vector for each position up to the configured block size; a call with time T uses positions zero through T - 1",
+   "aliases": [
+    "position table"
+   ],
+   "intuition": "the learned where-am-I row added into every opening note",
+   "anchor": "notes"
+  },
+  "parameter-registry": {
+   "owner": 9,
+   "depends_on": [
+    "param-object",
+    "pointer"
+   ],
+   "definition": "one flat array containing one pointer to every Param object owned by the model",
+   "aliases": [
+    "parameter registry"
+   ],
+   "intuition": "named fields say what each learned object does while one exactly-once list lets whole-model chores reach every object",
+   "anchor": "self"
+  },
+  "canonical-parameter-order": {
+   "owner": 9,
+   "depends_on": [
+    "parameter-registry",
+    "parameter-initialization"
+   ],
+   "definition": "the fixed sequence of Param objects shared by construction, seeded random draws, generic model loops, and later checkpoint bytes",
+   "aliases": [
+    "canonical parameter order"
+   ],
+   "intuition": "one stable numbered ledger keeps every whole-model consumer from inventing a different order",
+   "anchor": "self"
+  },
+  "chained-assignment": {
+   "owner": 9,
+   "depends_on": [
+    "pointer"
+   ],
+   "definition": "a C expression with adjacent assignments grouped from right to left, where the inner assignment's stored value becomes the outer assignment's value",
+   "aliases": [
+    "chained assignment"
+   ],
+   "intuition": "one constructor returns one Param pointer, then the registry slot and readable named field receive that same address",
+   "anchor": "self"
+  },
+  "private-model-blueprint": {
+   "owner": 9,
+   "previews": {
+    "8": "navigation title for Chapter 9, where the supplied internal layout is constructed"
+   },
+   "depends_on": [
+    "opaque-handle",
+    "parameter-registry",
+    "struct"
+   ],
+   "definition": "the exact internal Model and Block structure declarations shared by separately compiled model implementation files",
+   "aliases": [
+    "private blueprint",
+    "private model blueprint",
+    "shared private layout"
+   ],
+   "intuition": "every implementation file must calculate the same field offset from Model *, so the supplied internal header is byte-exact",
+   "anchor": "self"
+  },
+  "tied-head": {
+   "owner": 9,
+   "previews": {
+    "0": "parts list (tied embeddings)",
+    "1": "token table reused as output scoreboard",
+    "5": "final prediction head reuses the token table as its weights; Chapter 9 constructs the arrangement",
+    "6": "output matmul and embedding contributions meet in the same token-table gradient; Chapter 9 constructs the arrangement"
+   },
+   "depends_on": [
+    "embedding",
+    "param-object",
+    "transpose",
+    "logits"
+   ],
+   "definition": "one token-table Param supplies both opening lookup rows and the weight rows used to score the final notes",
+   "aliases": [
+    "weight tying",
+    "tied",
+    "tying",
+    "tied head",
+    "tied output"
+   ],
+   "intuition": "one token-table object is both the input dictionary and output scoreboard, so both jobs share values, gradients, and optimizer history",
+   "anchor": "bet-sheet"
+  },
+  "arena": {
+   "owner": 10,
+   "previews": {
+    "1": "full-capacity working buffers are reused across calls; Chapter 10 owns their storage plan",
+    "5": "future allocation that will hold temporary forward and backward views; Chapter 10 constructs its placement",
+    "9": "literal values_arena and gradient_arena fields reserved in the supplied private layout; Chapter 10 constructs their storage plan"
+   },
+   "depends_on": [
+    "activation",
+    "allocation",
+    "buffer-capacity",
+    "gradient",
+    "matrix-view",
+    "ownership-lifetime",
+    "pointer-arithmetic"
+   ],
+   "definition": "one owned contiguous float allocation whose disjoint ranges back many non-owning views; Tiny AgenC uses one for forward values and one for activation gradients",
+   "aliases": [
+    "arena",
+    "arenas",
+    "values_arena",
+    "gradient_arena"
+   ],
+   "intuition": "one float array is divided by exact numeric offsets, and each Mat view exposes one non-overlapping range",
+   "anchor": "self"
+  },
+  "checked-memory-size-arithmetic": {
+   "owner": 10,
+   "previews": {
+    "4": "model dimensions will receive a checked memory calculation before allocation",
+    "8": "one Param demonstrates fixed bounds-before-product guards",
+    "9": "Chapter 10 is named as owner of the checked whole-model byte calculation"
+   },
+   "depends_on": [
+    "allocation",
+    "size-t",
+    "sizeof",
+    "unsigned-wraparound"
+   ],
+   "definition": "compute size_t sums and products only after proving the result is at most SIZE_MAX, returning failure instead of allowing wraparound",
+   "aliases": [
+    "checked memory-size arithmetic",
+    "checked memory arithmetic",
+    "checked byte calculation",
+    "overflow-checked addition",
+    "overflow-checked multiplication"
+   ],
+   "intuition": "check left at most SIZE_MAX minus right before addition, and left zero or right at most SIZE_MAX divided by left before multiplication",
+   "anchor": "self"
+  },
+  "two-pass-arena-layout": {
+   "owner": 10,
+   "previews": {
+    "9": "model_memory.c is identified as measuring and placing temporary storage"
+   },
+   "depends_on": [
+    "arena",
+    "matrix-view",
+    "null-pointer",
+    "pointer-arithmetic",
+    "size-t"
+   ],
+   "definition": "run one fixed placement sequence with a NULL base to count floats, allocate that capacity, then run the same sequence with the real base to assign every view",
+   "aliases": [
+    "two-pass arena layout",
+    "two-pass arena placement",
+    "two-pass placement",
+    "measure-and-place layout"
+   ],
+   "intuition": "for a two-by-two view followed by one-by-three, the counting pass advances from zero to four to seven and the placement pass assigns starts zero and four",
+   "anchor": "self"
+  },
+  "model-memory-report": {
+   "owner": 10,
+   "previews": {
+    "0": "the first-run banner shows one reserved-working-memory total",
+    "1": "the activation count previews full-capacity storage and the T-squared attention area",
+    "9": "legal geometry is separated from representable storage before Chapter 10 constructs the report"
+   },
+   "depends_on": [
+    "activation",
+    "arena",
+    "checked-memory-size-arithmetic",
+    "gradient",
+    "model-configuration-validity",
+    "param-object",
+    "sizeof"
+   ],
+   "definition": "an allocation-free checked report of parameter-buffer bytes, value-arena bytes, activation-gradient bytes, two cached-id buffers, and their total",
+   "aliases": [
+    "ModelMemory",
+    "model_memory_requirements",
+    "model memory report",
+    "memory requirements"
+   ],
+   "intuition": "four named large-buffer subtotals are calculated before allocation; small structures, pointer arrays, and allocator overhead are excluded",
+   "anchor": "self"
+  },
+  "latest-forward-record": {
+   "owner": 11,
+   "previews": {
+    "1": "the activation ledger keeps one trip's working values for its matching backward pass",
+    "6": "saved values must describe the matching forward call",
+    "9": "the private blueprint reserves ids, active shape, target status, and top-level activation views",
+    "10": "one reusable arena and two id buffers hold the contents that the next forward call replaces"
+   },
+   "depends_on": [
+    "activation",
+    "backpropagation",
+    "batch",
+    "byte-copy",
+    "forward-pass",
+    "ownership-lifetime"
+   ],
+   "definition": "the model-owned record for the newest forward call: active shape, copied token ids, targets when supplied, target status, and the saved values that belong to a matching backward call; every later forward replaces its applicability",
+   "aliases": [
+    "latest-forward record",
+    "forward-state cache"
+   ],
+   "intuition": "one activation ledger belongs to one trip through the notes; a new trip rewrites the ledger even when some old bytes remain",
+   "anchor": "notes"
+  },
+  "inference-mode": {
+   "owner": 11,
+   "depends_on": [
+    "activation",
+    "cross-entropy",
+    "forward-pass",
+    "latest-forward-record",
+    "logits",
+    "loss"
+   ],
+   "definition": "a target-free model_forward call that runs the shared score route through logits, skips fresh probabilities and loss, returns a zero no-loss sentinel, and replaces the latest-forward record with one that must not feed backward",
+   "aliases": [
+    "inference",
+    "inference mode"
+   ],
+   "intuition": "run the shared route without an answer sheet, leaving raw next-character scores for a later caller but making no bet, grade, correction, or character choice",
+   "anchor": "bet-sheet"
+  },
+  "model-backward-wiring": {
+   "owner": 12,
+   "previews": {
+    "1": "the reverse map previews returning corrections; Chapter 12 assembles the exact source route",
+    "6": "the complete local derivative ledger previews the model-scale call order",
+    "9": "the tied table and registry preview model-wide gradient destinations",
+    "10": "the activation-gradient arena and stream selectors prepare the shared destinations",
+    "11": "the latest target-bearing record prepares the saved values that backward consumes"
+   },
+   "depends_on": [
+    "backpropagation",
+    "gradient-accumulation",
+    "latest-forward-record",
+    "matrix-view",
+    "residual-addition",
+    "tied-head"
+   ],
+   "definition": "one source-ordered reverse traversal of the newest target-bearing forward record, starting from cleared destinations, walking blocks from L-1 to zero, and accumulating at residual and tied paths",
+   "aliases": [
+    "model backward wiring",
+    "whole-model backward wiring"
+   ],
+   "intuition": "read the notes highway backward and add every returning correction into the matching lane where paths meet",
+   "anchor": "highway"
+  },
+  "parameter-connectivity-witness": {
+   "owner": 12,
+   "depends_on": [
+    "derivative-check",
+    "gradient",
+    "param-object",
+    "parameter-registry"
+   ],
+   "definition": "a fixed-fixture check that requires at least one finite nonzero gradient entry in every registered Param while making no claim that every coordinate or packed subregion is connected",
+   "aliases": [
+    "parameter-connectivity witness",
+    "parameter connectivity witness"
+   ],
+   "intuition": "inspect each registered parameter object for at least one returning correction, while admitting that a live entry can hide an unused neighbor in the same object",
+   "anchor": "self"
+  },
+  "matmul": {
+   "owner": 5,
+   "previews": {
+    "1": "matrix multiplication, the workhorse"
+   },
+   "depends_on": [
+    "matrix",
+    "dot-product",
+    "transpose",
+    "weight"
+   ],
+   "definition": "dot every input row with every weight row, computing out = x * W^T for weights stored as outputs by inputs",
+   "aliases": [
+    "matmul",
+    "matrix multiplication",
+    "matrix multiply"
+   ],
+   "intuition": "rows dotted with rows; every transform in the model is one of these",
+   "anchor": "self"
+  },
+  "dot-product": {
+   "owner": 5,
+   "previews": {
+    "1": "multiply matching channels, add up"
+   },
+   "depends_on": [
+    "vector"
+   ],
+   "definition": "sum of elementwise products of two equal-length rows",
+   "aliases": [
+    "dot product"
+   ],
+   "intuition": "multiply matching entries, add them up",
+   "anchor": "self"
+  },
+  "sum-notation": {
+   "owner": 5,
+   "depends_on": [
+    "dot-product"
+   ],
+   "definition": "Sigma as the math spelling of the accumulate loop",
+   "aliases": [],
+   "scan": false,
+   "intuition": "Sigma is the math spelling of the accumulate loop",
+   "anchor": "self"
+  },
+  "layernorm": {
+   "owner": 5,
+   "previews": {
+    "0": "parts list (layer normalization)",
+    "1": "steady the stream's scale"
+   },
+   "depends_on": [
+    "mean-variance",
+    "channel",
+    "epsilon",
+    "parameter",
+    "vector"
+   ],
+   "definition": "subtract each row's mean, multiply by 1/sqrt(population variance + epsilon), then apply learned per-channel gain and bias",
+   "aliases": [
+    "layernorm",
+    "layer normalization"
+   ],
+   "intuition": "centers and rescales each row; its learned volume knob starts neutral at gain one, bias zero",
+   "anchor": "volume-knob"
+  },
+  "epsilon": {
+   "owner": 5,
+   "depends_on": [
+    "mean-variance"
+   ],
+   "definition": "a small positive constant added at a division boundary so an otherwise zero divisor stays finite; layernorm uses 1e-5 inside its variance sum",
+   "aliases": [
+    "epsilon"
+   ],
+   "intuition": "a tiny floor under a computed spread keeps division finite when the unguarded spread would be zero",
+   "anchor": "volume-knob"
+  },
+  "mean-variance": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "mean is the average; variance is mean squared distance from it; standard deviation is the square root of variance",
+   "aliases": [
+    "variance",
+    "standard deviation"
+   ],
+   "intuition": "find the center, average squared distances, then take a square root; independent variances add before that root",
+   "anchor": "self"
+  },
+  "gelu": {
+   "owner": 5,
+   "previews": {
+    "0": "parts list",
+    "1": "the smooth bend between the two MLP matmuls"
+   },
+   "depends_on": [
+    "circle-angle",
+    "hyperbolic-tangent",
+    "nonlinearity"
+   ],
+   "definition": "the smooth transform 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3)))",
+   "aliases": [
+    "gelu"
+   ],
+   "intuition": "the smooth bend between widen and narrow",
+   "anchor": "self"
+  },
+  "nonlinearity": {
+   "owner": 5,
+   "depends_on": [
+    "linear-transform"
+   ],
+   "definition": "a bend applied between matrix multiplications that cannot be collapsed into one linear transform",
+   "aliases": [
+    "nonlinearity",
+    "nonlinearities"
+   ],
+   "intuition": "without a bend, widen then narrow is still one matrix multiplication wearing two names",
+   "anchor": "self"
+  },
+  "hyperbolic-tangent": {
+   "owner": 5,
+   "depends_on": [
+    "exponential"
+   ],
+   "definition": "tanh(x) = (exp(2x) - 1) / (exp(2x) + 1), a smooth curve bounded between -1 and 1",
+   "aliases": [
+    "hyperbolic tangent",
+    "tanh"
+   ],
+   "intuition": "large negative inputs flatten near -1, zero stays zero, and large positive inputs flatten near 1",
+   "anchor": "self"
+  },
+  "mlp": {
+   "owner": 5,
+   "previews": {
+    "1": "widen, bend, narrow; the feed-forward layer",
+    "0": "parts list: GELU feed-forward layers"
+   },
+   "depends_on": [
+    "matmul",
+    "gelu",
+    "channel"
+   ],
+   "definition": "a widening matrix multiplication, GELU, and a narrowing matrix multiplication",
+   "aliases": [
+    "mlp",
+    "feed-forward"
+   ],
+   "intuition": "widen the notes, bend them, narrow them back",
+   "anchor": "notes"
+  },
+  "linear-transform": {
+   "owner": 5,
+   "previews": {
+    "1": "a multiply-by-a-weight-matrix step; Chapter 5 constructs the multiplication"
+   },
+   "depends_on": [
+    "matmul",
+    "weight"
+   ],
+   "definition": "a multiply-by-a-weight-matrix step",
+   "aliases": [
+    "linear transform",
+    "linear transforms"
+   ],
+   "intuition": "a multiply-by-a-weight-matrix step",
+   "anchor": "self"
+  },
+  "derivative": {
+   "owner": 6,
+   "previews": {
+    "0": "loss-slope calculations are identified as Chapter 6 work",
+    "1": "a residual nudge moves the sum one-for-one; Chapter 6 names that rate"
+   },
+   "depends_on": [],
+   "definition": "the local rate at which one number changes when another receives an ever-smaller nudge",
+   "aliases": [
+    "derivative",
+    "derivatives",
+    "local slope",
+    "local slopes",
+    "slope",
+    "slopes"
+   ],
+   "intuition": "measure output change per unit input change as the nudge shrinks; a straight line keeps one rate while a bend has a rate at one point",
+   "anchor": "self"
+  },
+  "partial-derivative": {
+   "owner": 6,
+   "depends_on": [
+    "derivative"
+   ],
+   "definition": "a derivative with respect to one input while every other input is held fixed",
+   "aliases": [
+    "partial derivative",
+    "partial derivatives"
+   ],
+   "intuition": "nudge one input alone, keep the other inputs fixed, and measure how the output responds",
+   "anchor": "self"
+  },
+  "gradient": {
+   "owner": 6,
+   "previews": {
+    "0": "gradient checker gloss in checkpoint",
+    "1": "correction signals pushed backward"
+   },
+   "depends_on": [
+    "partial-derivative",
+    "loss",
+    "shape"
+   ],
+   "definition": "the shaped collection of the loss's partial derivatives with respect to a group of values",
+   "aliases": [
+    "gradient",
+    "gradients"
+   ],
+   "intuition": "one loss-slope number beside every value; its sign gives a direction and its size gives the local sensitivity",
+   "anchor": "self"
+  },
+  "gradient-accumulation": {
+   "owner": 6,
+   "previews": {
+    "1": "shared input and parameter gradients add every returning contribution; Chapter 6 builds the arithmetic"
+   },
+   "depends_on": [
+    "gradient"
+   ],
+   "definition": "add every valid returning path's contribution into a shared gradient destination instead of replacing earlier contributions",
+   "aliases": [
+    "gradient accumulation"
+   ],
+   "intuition": "when paths meet, += keeps every returning contribution in the same destination",
+   "anchor": "self"
+  },
+  "chain-rule": {
+   "owner": 6,
+   "previews": {
+    "0": "follow one change through the next; Chapter 6 builds the arithmetic",
+    "1": "the reverse-map preview points to Chapter 6 for slopes and the chain rule"
+   },
+   "depends_on": [
+    "derivative"
+   ],
+   "definition": "multiply local derivatives along a consecutive path of dependent calculations",
+   "aliases": [
+    "chain rule"
+   ],
+   "intuition": "follow one small change through the next calculation by multiplying how strongly each stage responds",
+   "anchor": "self"
+  },
+  "product-rule": {
+   "owner": 6,
+   "depends_on": [
+    "derivative"
+   ],
+   "definition": "when two changing factors are multiplied, add the derivative contribution from changing each factor while holding the other fixed",
+   "aliases": [
+    "product rule",
+    "product rules"
+   ],
+   "intuition": "a product can change through either factor, so both routes contribute to its local slope",
+   "anchor": "self"
+  },
+  "power-rule": {
+   "owner": 6,
+   "depends_on": [
+    "derivative",
+    "product-rule"
+   ],
+   "definition": "for the positive whole-number and reciprocal powers used here, the derivative of x^n is n times x^(n-1)",
+   "aliases": [
+    "power rule",
+    "power rules"
+   ],
+   "intuition": "x multiplied by itself n times has n equal routes for a nudge to change the product",
+   "anchor": "self"
+  },
+  "quotient-rule": {
+   "owner": 6,
+   "depends_on": [
+    "derivative",
+    "product-rule",
+    "power-rule",
+    "chain-rule"
+   ],
+   "definition": "for changing numerator a and denominator b, the derivative of a/b is (b times the derivative of a minus a times the derivative of b) divided by b squared",
+   "aliases": [
+    "quotient rule",
+    "quotient rules"
+   ],
+   "intuition": "numerator changes move a quotient in the same direction; denominator changes move it in the opposite direction and bring another denominator factor",
+   "anchor": "self"
+  },
+  "exponential-derivative": {
+   "owner": 6,
+   "depends_on": [
+    "derivative",
+    "exponential"
+   ],
+   "definition": "the derivative of exp(x) is exp(x)",
+   "aliases": [
+    "exponential derivative",
+    "derivative of exp",
+    "derivative of exponential"
+   ],
+   "intuition": "the exponential's local slope equals its current height",
+   "anchor": "self"
+  },
+  "logarithm-derivative": {
+   "owner": 6,
+   "depends_on": [
+    "derivative",
+    "logarithm",
+    "exponential-derivative",
+    "chain-rule"
+   ],
+   "definition": "for positive x, the derivative of log(x) is 1/x",
+   "aliases": [
+    "logarithm derivative",
+    "derivative of log",
+    "derivative of logarithm"
+   ],
+   "intuition": "log undoes exponential growth, so its slope shrinks in inverse proportion to its positive input",
+   "anchor": "self"
+  },
+  "tanh-derivative": {
+   "owner": 6,
+   "depends_on": [
+    "derivative",
+    "hyperbolic-tangent",
+    "exponential-derivative",
+    "quotient-rule",
+    "chain-rule"
+   ],
+   "definition": "the derivative of tanh(x) is 1 minus tanh(x) squared",
+   "aliases": [
+    "tanh derivative",
+    "derivative of tanh"
+   ],
+   "intuition": "tanh climbs fastest near zero and flattens as its value approaches either bound",
+   "anchor": "self"
+  },
+  "hadamard-product": {
+   "owner": 6,
+   "depends_on": [
+    "vector"
+   ],
+   "definition": "multiply matching entries of two equal-length vectors and keep each product as a vector entry",
+   "aliases": [
+    "Hadamard product",
+    "Hadamard products"
+   ],
+   "intuition": "pair each numbered slot with the same slot, as in a dot product, but keep the separate products instead of adding them",
+   "anchor": "self"
+  },
+  "jacobian": {
+   "owner": 6,
+   "depends_on": [
+    "matrix",
+    "partial-derivative"
+   ],
+   "definition": "a matrix whose row i, column j holds the partial derivative of output i with respect to input j",
+   "aliases": [
+    "Jacobian",
+    "Jacobians"
+   ],
+   "intuition": "write every output-against-input slope in a small grid; backward applies the grid's effect without storing the grid",
+   "anchor": "self"
+  },
+  "backpropagation": {
+   "owner": 6,
+   "previews": {
+    "0": "parts list",
+    "1": "same diagram read bottom-to-top"
+   },
+   "depends_on": [
+    "forward-pass",
+    "chain-rule",
+    "gradient",
+    "gradient-accumulation"
+   ],
+   "definition": "traverse the saved forward operations in reverse, multiply each arriving gradient by local derivatives, and accumulate where paths meet",
+   "aliases": [
+    "backpropagation",
+    "backprop",
+    "backward pass"
+   ],
+   "intuition": "read the forward diagram bottom-to-top, sending correction signals backward and collecting every valid path",
+   "anchor": "self"
+  },
+  "finite-differences": {
+   "owner": 7,
+   "previews": {
+    "6": "an independent nudge-based check compares observed loss response with the handwritten backward result"
+   },
+   "depends_on": [
+    "derivative"
+   ],
+   "definition": "estimate a local slope from small nonzero input nudges evaluated through the forward calculation",
+   "aliases": [
+    "finite difference",
+    "finite differences",
+    "finite-difference"
+   ],
+   "intuition": "ask nearby forward values how quickly one scalar changes without reading a handwritten derivative formula",
+   "anchor": "self"
+  },
+  "one-sided-difference": {
+   "owner": 7,
+   "depends_on": [
+    "derivative",
+    "finite-differences"
+   ],
+   "definition": "estimate a derivative from the value at x and one nearby value f(x + h)",
+   "aliases": [
+    "one-sided difference",
+    "one-sided differences"
+   ],
+   "intuition": "the slope from x to x plus h includes the curve's bend across that whole interval",
+   "anchor": "self"
+  },
+  "central-difference": {
+   "owner": 7,
+   "depends_on": [
+    "derivative",
+    "finite-differences"
+   ],
+   "definition": "estimate a derivative as (f(x + h) - f(x - h)) / (2*h), using equal nudges on both sides",
+   "aliases": [
+    "central difference",
+    "central differences"
+   ],
+   "intuition": "measure across a balanced interval so matching bend error on the two sides cancels",
+   "anchor": "self"
+  },
+  "truncation-error": {
+   "owner": 7,
+   "depends_on": [
+    "finite-differences"
+   ],
+   "definition": "the derivative-estimate error left by using a nonzero interval in place of the limiting local slope",
+   "aliases": [
+    "truncation error"
+   ],
+   "intuition": "a finite-width interval includes some of the curve beyond the one-point slope",
+   "anchor": "self"
+  },
+  "second-order-error": {
+   "owner": 7,
+   "depends_on": [
+    "central-difference",
+    "truncation-error"
+   ],
+   "definition": "an error whose leading size is bounded by a constant times h squared for sufficiently small h, written O(h^2)",
+   "aliases": [
+    "second-order error",
+    "second-order accuracy"
+   ],
+   "intuition": "divide the nudge by ten and the leading truncation error falls by about one hundred",
+   "anchor": "self"
+  },
+  "floating-point-cancellation": {
+   "owner": 7,
+   "depends_on": [
+    "float-precision"
+   ],
+   "definition": "loss of useful significant digits when nearly equal rounded floating-point values are subtracted",
+   "aliases": [
+    "floating-point cancellation",
+    "float cancellation"
+   ],
+   "intuition": "the matching leading digits disappear, leaving a small difference with fewer reliable digits",
+   "anchor": "self"
+  },
+  "random-projection": {
+   "owner": 7,
+   "depends_on": [
+    "dot-product",
+    "gaussian",
+    "gradient"
+   ],
+   "definition": "map a vector or matrix to one scalar by taking its dot product with one fixed randomly drawn vector",
+   "aliases": [
+    "random projection",
+    "random projections"
+   ],
+   "intuition": "one fixed row u turns every output entry into part of one measurable scalar, while backward receives that same u",
+   "anchor": "self"
+  },
+  "mixed-tolerance": {
+   "owner": 7,
+   "depends_on": [
+    "float-precision"
+   ],
+   "definition": "accept two floats when their absolute difference is no larger than an absolute floor plus a relative allowance times their larger magnitude",
+   "aliases": [
+    "mixed tolerance",
+    "mixed tolerances"
+   ],
+   "intuition": "the fixed floor protects slopes near zero while the proportional part grows with larger slopes",
+   "anchor": "self"
+  },
+  "known-answer-forward-test": {
+   "owner": 7,
+   "depends_on": [
+    "forward-pass"
+   ],
+   "definition": "run forward on a fully specified small input and compare its result with an independently worked expected value",
+   "aliases": [
+    "known-answer forward test",
+    "known-answer forward tests"
+   ],
+   "intuition": "if the intended square at two should return four, a consistently differentiated cubic still fails by returning eight",
+   "anchor": "self"
+  },
+  "derivative-check": {
+   "owner": 7,
+   "depends_on": [
+    "backpropagation",
+    "finite-differences",
+    "mixed-tolerance",
+    "random-projection"
+   ],
+   "definition": "compare a backward calculation's analytic gradient with finite-difference slopes of the forward calculation within a stated tolerance",
+   "aliases": [
+    "derivative check",
+    "derivative checks"
+   ],
+   "intuition": "let backward claim each slope, let nearby forward measurements answer independently, and make the mixed tolerance referee the pair",
+   "anchor": "self"
+  },
+  "function-pointer-callback": {
+   "owner": 7,
+   "depends_on": [
+    "pointer"
+   ],
+   "definition": "a function pointer stores which compatible function to call; a function invoked later through that supplied pointer serves as a callback",
+   "aliases": [
+    "function pointer",
+    "function pointers",
+    "callback",
+    "callbacks"
+   ],
+   "intuition": "give the common nudge loop one operation-specific measure function to call without copying the loop",
+   "anchor": "self"
+  },
+  "designated-struct-initializer": {
+   "owner": 7,
+   "depends_on": [
+    "struct",
+    "struct-member-access"
+   ],
+   "definition": "a brace list whose .field = value entries initialize named struct fields without relying on declaration order; omitted fields begin at zero",
+   "aliases": [
+    "designated struct initializer",
+    "designated initializer",
+    "designated initializers"
+   ],
+   "intuition": "fill the GELU case's out, projection, and input fields by name while unrelated case fields begin at zero",
+   "anchor": "self"
+  },
+  "bounded-formatted-output": {
+   "owner": 7,
+   "depends_on": [
+    "buffer-capacity",
+    "sizeof",
+    "variadic-function"
+   ],
+   "definition": "snprintf formats values into a character buffer while respecting a supplied byte capacity, including the terminating zero byte",
+   "aliases": [
+    "bounded formatted output",
+    "snprintf"
+   ],
+   "intuition": "build model param followed by an index inside a 32-byte label array without writing beyond it",
+   "anchor": "self"
+  },
+  "activation": {
+   "owner": 1,
+   "depends_on": [
+    "parameter"
+   ],
+   "definition": "any value the forward pass computes, as opposed to learned parameters",
+   "aliases": [],
+   "scan": false,
+   "intuition": "working contents recomputed for one trip while their allocated storage is reused, not a learned parameter",
+   "anchor": "notes"
+  },
+  "tensor": {
+   "owner": 1,
+   "depends_on": [
+    "matrix"
+   ],
+   "definition": "umbrella word for any shaped collection of numbers",
+   "aliases": [
+    "tensor",
+    "tensors"
+   ],
+   "intuition": "one word covering matrices, rows, and collections with more dimensions",
+   "anchor": "self"
+  },
+  "transpose": {
+   "owner": 1,
+   "depends_on": [
+    "matrix"
+   ],
+   "definition": "the same grid read with rows and columns swapped",
+   "aliases": [
+    "transpose",
+    "transposed"
+   ],
+   "intuition": "the same grid with rows and columns swapped",
+   "anchor": "self"
+  },
+  "module": {
+   "owner": 1,
+   "previews": {
+    "0": "separate runtime pieces built in the lab workspace"
+   },
+   "depends_on": [],
+   "definition": "a group of C files and functions responsible for one contract",
+   "aliases": [
+    "module",
+    "modules"
+   ],
+   "intuition": "one named part of the program with one job and a public boundary",
+   "anchor": "self"
+  },
+  "pointer": {
+   "owner": 1,
+   "previews": {
+    "0": "C value that stores an address; Chapter 1 teaches its first use"
+   },
+   "depends_on": [],
+   "definition": "a C value that stores an address",
+   "aliases": [
+    "pointer",
+    "pointers"
+   ],
+   "intuition": "an address held in a value so code can reach another object",
+   "anchor": "self"
+  },
+  "size-t": {
+   "owner": 1,
+   "depends_on": [],
+   "definition": "C's unsigned integer type for object sizes, element counts, and byte counts",
+   "aliases": [
+    "size_t"
+   ],
+   "intuition": "move dimension arithmetic into the type C uses to count objects before multiplying",
+   "anchor": "self"
+  },
+  "struct": {
+   "owner": 1,
+   "depends_on": [],
+   "definition": "C's way to group named fields into one value",
+   "aliases": [
+    "struct",
+    "structs"
+   ],
+   "intuition": "one value made from named slots",
+   "anchor": "self"
+  },
+  "opaque-handle": {
+   "owner": 1,
+   "depends_on": [
+    "module",
+    "pointer",
+    "struct"
+   ],
+   "definition": "a pointer to a representation hidden behind a module's public functions",
+   "aliases": [
+    "opaque handle",
+    "opaque handles"
+   ],
+   "intuition": "the caller holds the address while the module guards the private fields",
+   "anchor": "self"
+  },
+  "value-type": {
+   "owner": 1,
+   "depends_on": [
+    "struct"
+   ],
+   "definition": "a public struct whose complete description is copied by assignment",
+   "aliases": [
+    "value type",
+    "value types"
+   ],
+   "intuition": "copy the small public description itself, not a hidden object",
+   "anchor": "self"
+  },
+  "function-module": {
+   "owner": 1,
+   "depends_on": [
+    "module"
+   ],
+   "definition": "a module with functions but no mutable private state kept between calls",
+   "aliases": [
+    "function module",
+    "function modules"
+   ],
+   "intuition": "a named toolbox whose functions keep no hidden mutable object",
+   "anchor": "self"
+  },
+  "allocation": {
+   "owner": 2,
+   "previews": {
+    "1": "the util contract Chapter 2 will build"
+   },
+   "depends_on": [
+    "null-pointer",
+    "pointer"
+   ],
+   "definition": "request a block of bytes and receive its address or failure",
+   "aliases": [
+    "allocation",
+    "allocated",
+    "malloc",
+    "calloc"
+   ],
+   "intuition": "ask for a block of bytes before any pointer can refer to model storage",
+   "anchor": "self"
+  },
+  "null-pointer": {
+   "owner": 2,
+   "depends_on": [
+    "pointer"
+   ],
+   "definition": "the special C pointer value NULL that means no address",
+   "aliases": [
+    "null pointer"
+   ],
+   "intuition": "malloc returns the no-address value when it cannot supply a block",
+   "anchor": "self"
+  },
+  "sizeof": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "the C operator that reports how many bytes an object type occupies",
+   "aliases": [
+    "sizeof"
+   ],
+   "intuition": "inspect the pointed-to type for its byte size without following the pointer or reading the object",
+   "anchor": "self"
+  },
+  "type-alias": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "a second C name for a type, introduced with typedef",
+   "aliases": [
+    "type alias"
+   ],
+   "intuition": "give the three file-status outcomes one type name instead of passing an unexplained integer",
+   "anchor": "self"
+  },
+  "preprocessor-macro": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "a name or condition handled by C's preprocessor before ordinary compilation",
+   "aliases": [
+    "macro",
+    "macros",
+    "preprocessor"
+   ],
+   "intuition": "define the requested POSIX interface names before system headers are read",
+   "anchor": "self"
+  },
+  "file-private-static": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "static on a file-scope C function or object keeps that name private to the current C file",
+   "aliases": [
+    "static",
+    "file-private static"
+   ],
+   "intuition": "the utility file owns its clock constant and the RNG file owns its state-step helper without exporting either name",
+   "anchor": "self"
+  },
+  "logical-or": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "the C || operator is true when either condition is true and checks its left side first",
+   "aliases": [
+    "logical OR"
+   ],
+   "intuition": "reject the call when either required output address is missing",
+   "anchor": "self"
+  },
+  "const-qualification": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "const prevents code from changing an object through the qualified name or pointer",
+   "aliases": [],
+   "scan": false,
+   "intuition": "die may read the format characters through its pointer but promises not to rewrite them",
+   "anchor": "self"
+  },
+  "pointer-member-access": {
+   "owner": 2,
+   "depends_on": [
+    "pointer",
+    "struct"
+   ],
+   "definition": "the C -> operator follows a struct pointer and accesses one named field",
+   "aliases": [],
+   "scan": false,
+   "intuition": "rng->state follows the private RNG handle to its state field",
+   "anchor": "self"
+  },
+  "variadic-function": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "a C function whose fixed arguments may be followed by extra arguments",
+   "aliases": [
+    "variadic"
+   ],
+   "intuition": "die accepts one format string followed by the values that fill it",
+   "anchor": "self"
+  },
+  "fixed-width-integer": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "an integer type whose name states its exact bit count",
+   "aliases": [
+    "uint32_t",
+    "uint64_t",
+    "int32_t"
+   ],
+   "intuition": "the type name fixes the bit count used by files and PCG arithmetic",
+   "anchor": "self"
+  },
+  "native-byte-order": {
+   "owner": 2,
+   "depends_on": [
+    "fixed-width-integer"
+   ],
+   "definition": "the machine's ordering of an integer's bytes from least-significant first or most-significant first",
+   "aliases": [
+    "native byte order",
+    "byte order"
+   ],
+   "intuition": "on common eight-bit-byte machines, one is 01 00 00 00 or 00 00 00 01; the helpers copy those bytes unchanged",
+   "anchor": "self"
+  },
+  "unsigned-wraparound": {
+   "owner": 2,
+   "depends_on": [
+    "fixed-width-integer"
+   ],
+   "definition": "unsigned N-bit arithmetic wraps modulo 2^N",
+   "aliases": [
+    "unsigned wraparound"
+   ],
+   "intuition": "when an unsigned counter passes its largest bit pattern, it wraps to zero",
+   "anchor": "self"
+  },
+  "bitwise-operations": {
+   "owner": 2,
+   "depends_on": [
+    "fixed-width-integer"
+   ],
+   "definition": "shift, XOR, OR, and AND operate on individual bits of an integer",
+   "aliases": [
+    "bitwise"
+   ],
+   "intuition": "fold distant old-state bits with XOR, rotate them with shifts, then join and mask the pieces",
+   "anchor": "self"
+  },
+  "float-precision": {
+   "owner": 2,
+   "previews": {
+    "0": "exact generated text can depend on floating-point behavior; Chapter 2 builds the representation limit",
+    "1": "four-byte activation storage"
+   },
+   "depends_on": [],
+   "definition": "the supported IEEE 754 float carries 24 significant binary bits; compiler, math-library, and operation-order differences can change the last bits",
+   "aliases": [],
+   "scan": false,
+   "intuition": "keep the 24 PCG bits a float can distinguish; later last-bit arithmetic differences can steer a generated-text choice",
+   "anchor": "self"
+  },
+  "nonfinite-float": {
+   "owner": 5,
+   "previews": {
+    "1": "negative infinity as the conventional future-position mask that this source does not use"
+   },
+   "depends_on": [
+    "float-precision"
+   ],
+   "definition": "IEEE floating-point markers outside finite numbers: positive and negative infinity represent overflow directions, while NaN marks arithmetic with no real-number answer",
+   "aliases": [
+    "nonfinite floating-point value",
+    "nonfinite floating-point values",
+    "NaN",
+    "positive infinity",
+    "negative infinity"
+   ],
+   "intuition": "infinity minus infinity has no real-number answer, so a softmax row containing that subtraction becomes NaN instead of a bet sheet",
+   "anchor": "bet-sheet"
+  },
+  "thread": {
+   "owner": 5,
+   "depends_on": [],
+   "definition": "one separately scheduled path of instructions through a program; threads in that program share its memory",
+   "aliases": [
+    "thread",
+    "threads",
+    "worker thread",
+    "worker threads"
+   ],
+   "intuition": "several workers can read shared inputs at once, but safe parallel loops give each worker a separate output row",
+   "anchor": "self"
+  },
+  "openmp": {
+   "owner": 5,
+   "previews": {
+    "0": "optional build support that spreads selected independent loops across CPU cores"
+   },
+   "depends_on": [
+    "thread",
+    "data-race"
+   ],
+   "definition": "compiler and runtime support for assigning selected C loop iterations to CPU threads when their writes are disjoint",
+   "aliases": [
+    "OpenMP"
+   ],
+   "intuition": "give independent loop iterations to several CPU workers",
+   "anchor": "self"
+  },
+  "data-race": {
+   "owner": 5,
+   "depends_on": [
+    "thread",
+    "undefined-behavior"
+   ],
+   "definition": "two unsynchronized threads access the same memory at the same time and at least one access writes, which gives C undefined behavior",
+   "aliases": [
+    "data race",
+    "data races"
+   ],
+   "intuition": "two workers may read the same input, but each must own a separate output row or slice",
+   "anchor": "self"
+  },
+  "ownership-lifetime": {
+   "owner": 2,
+   "depends_on": [
+    "allocation",
+    "pointer"
+   ],
+   "definition": "the caller responsible for one allocated block may use it until freeing it exactly once",
+   "aliases": [
+    "ownership",
+    "lifetime"
+   ],
+   "intuition": "the caller receives the block, uses it while alive, and ends its lifetime with one free",
+   "anchor": "self"
+  },
+  "monotonic-clock": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "a clock for elapsed durations whose readings do not move backward",
+   "aliases": [
+    "monotonic clock"
+   ],
+   "intuition": "elapsed-time ticks that civil-time corrections cannot turn backward",
+   "anchor": "self"
+  },
+  "assertion": {
+   "owner": 2,
+   "previews": {
+    "1": "programmer contract violations stop at the broken internal rule"
+   },
+   "depends_on": [],
+   "definition": "a removable C check for an internal programmer contract that stops an assertion-enabled build when false",
+   "aliases": [
+    "assert",
+    "assertion",
+    "assertions"
+   ],
+   "intuition": "a zero bound names no possible answer, so the caller contract requires bound greater than zero",
+   "anchor": "self"
+  },
+  "do-while-loop": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "a C loop that executes its body once before checking whether to repeat",
+   "aliases": [
+    "do-while"
+   ],
+   "intuition": "make one bounded draw, inspect its low word, and repeat only if it lies in the uneven edge",
+   "anchor": "self"
+  },
+  "linear-congruential": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "advance integer state with multiply, add, and fixed-width wraparound",
+   "aliases": [
+    "linear congruential generator"
+   ],
+   "intuition": "the hand-checkable state rule: multiply, add, wrap, repeat",
+   "anchor": "self"
+  },
+  "pcg32": {
+   "owner": 2,
+   "depends_on": [
+    "fixed-width-integer",
+    "bitwise-operations",
+    "linear-congruential",
+    "randomness",
+    "unsigned-wraparound"
+   ],
+   "definition": "a 64-bit congruential state step permuted into 32 output bits",
+   "aliases": [
+    "pcg32"
+   ],
+   "intuition": "the raw low bits repeat early, so fold distant old-state bits with XOR and rotate them into a 32-bit draw",
+   "anchor": "self"
+  },
+  "bounded-random": {
+   "owner": 2,
+   "depends_on": [
+    "pcg32",
+    "assertion",
+    "do-while-loop",
+    "unsigned-wraparound"
+   ],
+   "definition": "an unbiased integer draw in [0, bound) made by multiply-high and rejection",
+   "aliases": [
+    "bounded draw",
+    "bounded draws"
+   ],
+   "intuition": "split the product into high and low words, reject low words below 2^32 mod range, then return the high word",
+   "anchor": "self"
+  },
+  "sine-cosine": {
+   "owner": 2,
+   "depends_on": [
+    "circle-angle",
+    "squared-distance"
+   ],
+   "definition": "cosine and sine give the horizontal and vertical coordinates of an angle on a circle",
+   "aliases": [
+    "cosine",
+    "sine"
+   ],
+   "intuition": "the unit-circle turn table gives horizontal cosine and vertical sine; multiply both by the radius",
+   "anchor": "self"
+  },
+  "squared-distance": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "perpendicular coordinates x and y have squared radius r*r = x*x + y*y",
+   "aliases": [
+    "squared radius"
+   ],
+   "intuition": "four 3-by-4 right triangles leave an inner square of area 25, so the slanted distance is 5",
+   "anchor": "self"
+  },
+  "circle-angle": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "an angle records direction; radians measure it by arc length so one full turn is 2*pi",
+   "aliases": [
+    "radians"
+   ],
+   "intuition": "zero, quarter, half, and three-quarter turns point right, up, left, and down",
+   "anchor": "self"
+  },
+  "randomness": {
+   "owner": 2,
+   "previews": {
+    "0": "seeded choices that can be replayed",
+    "1": "random initial weights and corpus snippets"
+   },
+   "depends_on": [],
+   "definition": "repeatable pseudorandom sequences used for initialization, batch choice, and generated-text choices",
+   "aliases": [
+    "randomness",
+    "pseudorandomness"
+   ],
+   "intuition": "each job owns a seeded handle; equal seeds replay while advancing one handle cannot move another",
+   "anchor": "self"
+  },
+  "uniform-random": {
+   "owner": 2,
+   "depends_on": [
+    "float-precision",
+    "pcg32",
+    "randomness"
+   ],
+   "definition": "one of exactly 2^24 fractions k/2^24 in [0, 1), each backed by 256 PCG32 outputs",
+   "aliases": [
+    "uniform draw",
+    "uniform draws"
+   ],
+   "intuition": "keep the 24 high bits a float can distinguish and scale the equally represented grid from 0 through 1 - 2^-24",
+   "anchor": "self"
+  },
+  "independence": {
+   "owner": 2,
+   "depends_on": [],
+   "definition": "learning one random choice does not change the chances assigned to another",
+   "aliases": [],
+   "scan": false,
+   "intuition": "every pair of two balanced sign choices occurs, so fixing the first leaves the second's chances unchanged",
+   "anchor": "self"
+  },
+  "gaussian": {
+   "owner": 2,
+   "previews": {
+    "1": "bell-curve noise with spread sigma"
+   },
+   "depends_on": [
+    "logarithm",
+    "independence",
+    "mean-variance",
+    "sine-cosine",
+    "uniform-random"
+   ],
+   "definition": "the ideal mean-zero, standard-deviation-one bell rule; rng_gaussian is its 24-bit Box-Muller approximation",
+   "aliases": [
+    "gaussian",
+    "box-muller",
+    "normal distribution",
+    "standard normal"
+   ],
+   "intuition": "equal-area rings turn an exponential tail into a radius; the finite uniform grid caps that radius near 5.7681",
+   "anchor": "self"
+  },
+  "optimizer": {
+   "owner": 8,
+   "previews": {
+    "0": "the mechanism that uses gradients to adjust parameters; Chapter 8 constructs it",
+    "1": "the updater that turns gradients into parameter changes"
+   },
+   "depends_on": [
+    "gradient",
+    "parameter"
+   ],
+   "definition": "a rule with settings and optional persistent state that turns computed gradients into parameter changes",
+   "aliases": [
+    "optimizer",
+    "optimizers"
+   ],
+   "intuition": "the current gradient supplies one direction signal; settings and optional history determine the optimizer's actual move",
+   "anchor": "self"
+  },
+  "learning-rate": {
+   "owner": 8,
+   "depends_on": [
+    "gradient",
+    "parameter"
+   ],
+   "definition": "the nonnegative multiplier that controls the distance of a parameter update",
+   "aliases": [
+    "learning rate"
+   ],
+   "intuition": "the update rule chooses a direction and the learning rate scales the distance moved along it",
+   "anchor": "self"
+  },
+  "stochastic-gradient-descent": {
+   "owner": 8,
+   "depends_on": [
+    "batch",
+    "gradient",
+    "learning-rate",
+    "optimizer"
+   ],
+   "definition": "subtract learning rate times the current batch gradient from each parameter",
+   "aliases": [
+    "stochastic gradient descent",
+    "SGD"
+   ],
+   "intuition": "take a scaled downhill step using the correction signal estimated from one randomly drawn batch",
+   "anchor": "self"
+  },
+  "exponential-moving-average": {
+   "owner": 8,
+   "depends_on": [],
+   "definition": "a running history equal to beta times its old value plus 1 - beta times the newest observation",
+   "aliases": [
+    "exponential moving average",
+    "EMA"
+   ],
+   "intuition": "each new observation gets the largest fresh vote while every older vote fades by another factor of beta",
+   "anchor": "self"
+  },
+  "momentum": {
+   "owner": 8,
+   "depends_on": [
+    "exponential-moving-average",
+    "gradient"
+   ],
+   "definition": "use a fading average of gradients to carry recent direction between optimizer steps",
+   "aliases": [
+    "momentum"
+   ],
+   "intuition": "recent batch directions keep a fading vote instead of the latest batch replacing them outright",
+   "anchor": "self"
+  },
+  "first-moment": {
+   "owner": 8,
+   "depends_on": [
+    "exponential-moving-average",
+    "gradient"
+   ],
+   "definition": "Adam's exponential moving average of the signed gradient at one scalar coordinate",
+   "aliases": [
+    "first moment",
+    "first-moment"
+   ],
+   "intuition": "a fading signed history records which direction recent gradients have repeatedly requested",
+   "anchor": "self"
+  },
+  "second-raw-moment": {
+   "owner": 8,
+   "depends_on": [
+    "exponential-moving-average",
+    "gradient"
+   ],
+   "definition": "Adam's exponential moving average of squared gradients at one scalar coordinate, without subtracting a mean",
+   "aliases": [
+    "second raw moment",
+    "second moment",
+    "second-moment"
+   ],
+   "intuition": "square each gradient to keep its size but remove its sign, then retain a fading size history for that coordinate",
+   "anchor": "self"
+  },
+  "adaptive-scaling": {
+   "owner": 8,
+   "depends_on": [
+    "epsilon",
+    "first-moment",
+    "second-raw-moment"
+   ],
+   "definition": "divide each coordinate's signed gradient history by sqrt(its squared-gradient history) + epsilon",
+   "aliases": [
+    "adaptive scaling"
+   ],
+   "intuition": "measure each requested move in units of that same coordinate's recent gradient size",
+   "anchor": "self"
+  },
+  "bias-correction": {
+   "owner": 8,
+   "depends_on": [
+    "exponential-moving-average"
+   ],
+   "definition": "divide a zero-started exponential moving average by its accumulated coefficient mass 1 - beta^step so the weights renormalize to one",
+   "aliases": [
+    "bias correction",
+    "cold-start correction"
+   ],
+   "intuition": "the artificial zero start leaves the observed weights summing below one, so rescale their accumulated total back to one",
+   "anchor": "self"
+  },
+  "adam-optimizer": {
+   "owner": 8,
+   "depends_on": [
+    "adaptive-scaling",
+    "bias-correction",
+    "epsilon",
+    "first-moment",
+    "learning-rate",
+    "optimizer",
+    "second-raw-moment"
+   ],
+   "definition": "an optimizer that bias-corrects signed and squared-gradient moving averages, then uses their ratio to scale every parameter coordinate",
+   "aliases": [
+    "Adam",
+    "Adam optimizer"
+   ],
+   "intuition": "carry recent direction, measure it against that coordinate's recent gradient size, and use the corrected ratio for the next move",
+   "anchor": "self"
+  },
+  "weight-decay": {
+   "owner": 8,
+   "depends_on": [
+    "learning-rate",
+    "parameter"
+   ],
+   "definition": "a learning-rate-scaled pull that moves selected parameter values directly toward zero",
+   "aliases": [
+    "weight decay",
+    "decoupled weight decay"
+   ],
+   "intuition": "subtract a stated fraction of the current value directly instead of sending that pull through adaptive gradient scaling",
+   "anchor": "self"
+  },
+  "adamw-optimizer": {
+   "owner": 8,
+   "previews": {
+    "0": "parts-list label with Chapter 8 as the construction",
+    "1": "the mechanism that turns gradients into parameter nudges"
+   },
+   "depends_on": [
+    "adam-optimizer",
+    "weight-decay"
+   ],
+   "definition": "Adam with selected weight decay applied outside the adaptive gradient fraction",
+   "aliases": [
+    "AdamW"
+   ],
+   "intuition": "make Adam's history-scaled move, then include a separately sized direct pull toward zero",
+   "anchor": "self"
+  },
+  "param-object": {
+   "owner": 8,
+   "depends_on": [
+    "first-moment",
+    "gradient",
+    "matrix",
+    "parameter",
+    "second-raw-moment"
+   ],
+   "definition": "the opaque C object that owns one matrix-shaped value region and same-shaped gradient, first-moment, and second-moment regions",
+   "aliases": [
+    "Param"
+   ],
+   "scan": false,
+   "intuition": "four aligned regions keep every learned value beside its correction signal and both pieces of optimizer history",
+   "anchor": "self"
+  },
+  "gradient-norm": {
+   "owner": 8,
+   "depends_on": [
+    "gradient"
+   ],
+   "definition": "the square root of the sum of every squared parameter-gradient entry",
+   "aliases": [
+    "gradient norm"
+   ],
+   "intuition": "collapse the complete gradient vector to one length while retaining its direction separately",
+   "anchor": "self"
+  },
+  "gradient-clipping": {
+   "owner": 8,
+   "depends_on": [
+    "gradient-norm",
+    "param-object"
+   ],
+   "definition": "when the global gradient norm exceeds its cap, multiply every parameter gradient by the same cap divided by that norm",
+   "aliases": [
+    "gradient clipping",
+    "global clipping",
+    "global gradient clipping"
+   ],
+   "intuition": "one shared scale shortens an oversized model-wide gradient without changing the ratios among its coordinates",
+   "anchor": "self"
+  },
+  "exponential": {
+   "owner": 2,
+   "previews": {
+    "0": "exp and log named as math the book will build"
+   },
+   "depends_on": [],
+   "definition": "exp(x) = e^x, where e is the limiting factor from increasingly fine compounded growth",
+   "aliases": [],
+   "scan": false,
+   "intuition": "split one stated increase into finer compounded updates, check whole and half powers of the limiting factor, then name exp",
+   "anchor": "self"
+  },
+  "logarithm": {
+   "owner": 2,
+   "previews": {
+    "0": "exp and log named as math the book will build"
+   },
+   "depends_on": [
+    "exponential"
+   ],
+   "definition": "the inverse of exp on positive inputs",
+   "aliases": [],
+   "scan": false,
+   "intuition": "log answers which exponent made a positive exponential output",
+   "anchor": "self"
+  },
+  "temperature": {
+   "owner": 16,
+   "previews": {
+    "0": "controls how varied the generated choices are",
+    "14": "positive command value passed through to the Chapter 16 choice mechanism",
+    "15": "deferred scaling inside the opaque post-update progress-text hook"
+   },
+   "depends_on": [
+    "logits",
+    "softmax",
+    "probability-distribution"
+   ],
+   "definition": "a finite positive value that divides each logit's gap from the row maximum before softmax, widening the gaps below one and narrowing them above one",
+   "aliases": [
+    "temperature"
+   ],
+   "intuition": "a positive denominator on gaps in the bet sheet's raw scores: a smaller denominator stretches the gaps and concentrates the shares, while a larger one compresses them",
+   "anchor": "bet-sheet"
+  },
+  "sampling": {
+   "owner": 16,
+   "previews": {
+    "0": "sample command chooses the next characters",
+    "1": "weighted-die choice from the next-character bet sheet",
+    "14": "opaque generation operation whose checkpoint, prompt, length, temperature, seed, and output route are checked here",
+    "15": "opaque post-update progress-text hook; Chapter 16 constructs the draw and append mechanism"
+   },
+   "depends_on": [
+    "id",
+    "probability-distribution",
+    "token",
+    "uniform-random",
+    "vocabulary"
+   ],
+   "definition": "lay one half-open interval per vocabulary id with width equal to its probability, place one finite uniform draw, and choose the first id whose running boundary exceeds that draw",
+   "aliases": [
+    "sampling"
+   ],
+   "intuition": "lay the bet-sheet shares along the interval from zero to one, place one available uniform draw, append the id under it, and make a new bet sheet",
+   "anchor": "bet-sheet"
+  },
+  "sliding-context-window": {
+   "owner": 16,
+   "previews": {
+    "1": "generation uses the newest T ids after a prefix exceeds the model's context capacity",
+    "15": "deferred newest-suffix selection inside the opaque progress-text hook"
+   },
+   "depends_on": [
+    "autoregressive",
+    "context-length",
+    "inference-mode",
+    "logits",
+    "pointer-arithmetic",
+    "position-table",
+    "token"
+   ],
+   "definition": "once a generated prefix reaches context capacity, move its visible starting address so each next-token call receives the newest block_size ids and no older id",
+   "aliases": [
+    "sliding context window",
+    "sliding window"
+   ],
+   "intuition": "move the visible strip's left edge after it fills so the next bet sheet is built from the newest T ids",
+   "anchor": "bet-sheet"
+  },
+  "baseline": {
+   "owner": 17,
+   "depends_on": [
+    "loss"
+   ],
+   "definition": "a simpler prediction rule scored with the same loss on the same target positions as the model under judgment",
+   "aliases": [
+    "baseline",
+    "baselines"
+   ],
+   "intuition": "give a simpler answerer the same flashcards; extra machinery earns credit only when its grade is lower on those questions",
+   "anchor": "flashcards"
+  },
+  "bigram": {
+   "owner": 17,
+   "depends_on": [
+    "next-token-pair",
+    "probability-distribution",
+    "training-split",
+    "vocabulary"
+   ],
+   "definition": "an ordered pair of adjacent tokens; a bigram count predictor groups next-token counts by the pair's first token",
+   "aliases": [
+    "bigram",
+    "bigrams",
+    "bigram model",
+    "bigram count model"
+   ],
+   "intuition": "cover every flashcard question except its final visible character, then tally which answer followed that character in training",
+   "anchor": "flashcards"
+  },
+  "add-one-smoothing": {
+   "owner": 17,
+   "depends_on": [
+    "bigram",
+    "probability-distribution",
+    "vocabulary"
+   ],
+   "definition": "add one provisional count to every vocabulary outcome before normalizing, so every possible next token retains positive probability",
+   "aliases": [
+    "add-one smoothing",
+    "add-one smoothed"
+   ],
+   "intuition": "start every line of the bigram bet sheet with one counter before adding observed transitions",
+   "anchor": "bet-sheet"
+  },
+  "perplexity": {
+   "owner": 17,
+   "depends_on": [
+    "exponential",
+    "logarithm",
+    "loss"
+   ],
+   "definition": "exp of mean next-token loss, interpreted as the number of equal-probability choices whose uniform loss would be the same",
+   "aliases": [
+    "perplexity"
+   ],
+   "intuition": "replace the changing bet sheets with one equally split sheet that would receive the same average grade, then count its lines",
+   "anchor": "bet-sheet"
+  },
+  "seed": {
+   "owner": 2,
+   "previews": {
+    "0": "pins the randomness for reproducibility"
+   },
+   "depends_on": [
+    "randomness"
+   ],
+   "definition": "the caller's starting value incorporated by the generator's fixed entry procedure",
+   "aliases": [],
+   "scan": false,
+   "intuition": "the same starting value follows the same two-advance entry procedure and replays the draws",
+   "anchor": "self"
+  },
+  "checkpoint-format-identity": {
+   "owner": 13,
+   "depends_on": [
+    "fixed-width-integer",
+    "model-configuration",
+    "native-byte-order",
+    "serialization"
+   ],
+   "definition": "the TAGC version 1 agreement in which a native 32-bit magic value and version select one exact ordered header-and-payload byte layout",
+   "aliases": [
+    "magic value",
+    "format version",
+    "TAGC version 1"
+   ],
+   "intuition": "in the 130-byte worked file, magic occupies 0..3, version 4..7, six dimensions 8..31, tokenizer count 32..35, AB 36..37, 22 floats 38..125, and the final check 126..129",
+   "anchor": "self"
+  },
+  "checksum": {
+   "owner": 13,
+   "depends_on": [
+    "fixed-width-integer",
+    "serialization"
+   ],
+   "definition": "a stored fixed-size value recalculated from all preceding serialized bytes to detect accidental change",
+   "aliases": [
+    "checksum",
+    "checksums"
+   ],
+   "intuition": "01 02 and 00 03 both sum to 3, so a useful stored check must depend on bit positions rather than the ordinary byte total",
+   "anchor": "self"
+  },
+  "crc32": {
+   "owner": 13,
+   "depends_on": [
+    "bitwise-operations",
+    "checksum",
+    "fixed-width-integer",
+    "unsigned-wraparound"
+   ],
+   "definition": "the reflected 32-bit cyclic redundancy check used here as a checksum: initial FFFFFFFF, byte XOR, eight right-shift and EDB88320 polynomial updates per byte, then final complement",
+   "aliases": [
+    "CRC32",
+    "crc32_update",
+    "crc32_prefix"
+   ],
+   "intuition": "for byte 41, the source rule moves FFFFFFBE through eight checkable states and complements 2C266174 to D3D99E8B",
+   "anchor": "self"
+  },
+  "authentication": {
+   "owner": 13,
+   "depends_on": [
+    "checksum"
+   ],
+   "definition": "evidence that accepted bytes came from a trusted creator rather than merely matching an unkeyed accidental-change check",
+   "aliases": [
+    "authentication",
+    "authenticate"
+   ],
+   "intuition": "an editor can change checkpoint bytes and recalculate CRC32, so a matching checksum cannot identify who made the file",
+   "anchor": "self"
+  },
+  "checkpoint-resource-preflight": {
+   "owner": 13,
+   "depends_on": [
+    "checked-memory-size-arithmetic",
+    "checkpoint-format-identity",
+    "model-configuration-validity",
+    "model-memory-report"
+   ],
+   "definition": "an allocation-free load and save gate requiring valid geometry, at most one GiB of reported resident model memory, and an overflow-checked checkpoint size within the file ceiling before construction",
+   "aliases": [
+    "checkpoint resource preflight",
+    "checkpoint policy",
+    "checkpoint_config_supported"
+   ],
+   "intuition": "the valid V=1, T=1024, C=1, H=1, L=1, B=1024 header fits a 4,213-byte file but requests one 4-GiB attention-score region, so it is rejected before model_new",
+   "anchor": "self"
+  },
+  "file-descriptor": {
+   "owner": 13,
+   "depends_on": [],
+   "definition": "a nonnegative operating-system integer handle for an open file that remains live until it is closed or transferred to a stream",
+   "aliases": [
+    "file descriptor",
+    "file descriptors",
+    "fileno"
+   ],
+   "intuition": "mkstemp returns the integer handle; fdopen transfers it to FILE *, after which fclose closes both stream and descriptor",
+   "anchor": "self"
+  },
+  "octal-integer-literal": {
+   "owner": 13,
+   "depends_on": [],
+   "definition": "a C integer literal whose leading zero makes the following digits base eight",
+   "aliases": [
+    "octal C integer",
+    "octal integer literal"
+   ],
+   "intuition": "each 7 in 0777 contributes three one bits, so three digits select nine permission bits",
+   "anchor": "self"
+  },
+  "file-permission-bits": {
+   "owner": 13,
+   "depends_on": [
+    "bitwise-operations",
+    "file-descriptor",
+    "octal-integer-literal"
+   ],
+   "definition": "the owner, group, and other read, write, and execute bits selected from st_mode and applied to an open file by fchmod",
+   "aliases": [
+    "access bits",
+    "permission bits",
+    "fchmod"
+   ],
+   "intuition": "existing.st_mode & 0777 keeps only three read-write-execute triplets; this writer copies those bits but not ownership, access-control lists, or other metadata",
+   "anchor": "self"
+  },
+  "atomic-file-replacement": {
+   "owner": 13,
+   "depends_on": [
+    "file-descriptor"
+   ],
+   "definition": "write and close a complete adjacent temporary file, then rename it over the destination in one same-filesystem directory-entry operation",
+   "aliases": [
+    "atomic file replacement",
+    "atomic replacement"
+   ],
+   "intuition": "a concurrent opener sees complete model A before rename or complete model B after rename, never half-written B",
+   "anchor": "self"
+  },
+  "checkpoint": {
+   "owner": 13,
+   "previews": {
+    "0": "a saved-model file such as trained.bin; Chapter 13 builds and names the format",
+    "1": "the saved boundary between parameter-changing training and fixed-parameter generation"
+   },
+   "depends_on": [
+    "canonical-parameter-order",
+    "checkpoint-format-identity",
+    "crc32",
+    "model-configuration",
+    "parameter",
+    "serialization",
+    "tokenizer"
+   ],
+   "definition": "the self-contained saved-model handoff that records format identity, model dimensions, the canonical tokenizer alphabet, and learned parameter values with an accidental-change check so a later process can reconstruct the model",
+   "aliases": [
+    "checkpoint",
+    "checkpoints"
+   ],
+   "intuition": "the 130-byte worked checkpoint restores geometry, alphabet, and 22 learned floats; gradients, AdamW moments and step, RNG position, corpus position, arenas, and cached forward state remain outside version 1",
+   "anchor": "self"
+  },
+  "checkpoint-durability": {
+   "owner": 13,
+   "depends_on": [
+    "atomic-file-replacement",
+    "checkpoint",
+    "file-descriptor"
+   ],
+   "definition": "this implementation's bounded persistence promise: fsync the completed temporary file and atomically replace the runtime name, without claiming parent-directory synchronization or universal power-loss survival",
+   "aliases": [
+    "durability",
+    "parent-directory durability"
+   ],
+   "intuition": "fsync covers the temporary file's contents; rename changes the visible name; no parent-directory fsync means sudden-power-loss survival remains filesystem-dependent",
+   "anchor": "self"
+  },
+  "fatal-error-policy": {
+   "owner": 2,
+   "depends_on": [
+    "variadic-function"
+   ],
+   "definition": "the command-line process policy implemented by die: prefix one fatal diagnostic, write it to standard error, and end without returning",
+   "aliases": [
+    "fatal error policy",
+    "die"
+   ],
+   "intuition": "when required storage or state is unavailable, report the reason once at the shared wrapper instead of letting each caller improvise or continue without a model",
+   "anchor": "self"
+  },
+  "bounded-file-read": {
+   "owner": 2,
+   "depends_on": [
+    "allocation",
+    "ownership-lifetime",
+    "size-t",
+    "type-alias"
+   ],
+   "definition": "read an entire file only when its measured length fits a caller-supplied ceiling and representable sentinel allocation, returning distinct success, I/O-error, and too-large outcomes",
+   "aliases": [
+    "bounded file read",
+    "bounded reader",
+    "file_slurp_bounded"
+   ],
+   "intuition": "measure the file against the caller's ceiling, reject an oversized body before allocating or reading it, and publish owned bytes plus their exact length only after a complete read",
+   "anchor": "self"
+  },
+  "argument-vector": {
+   "owner": 14,
+   "depends_on": [
+    "pointer",
+    "pointer-arithmetic"
+   ],
+   "definition": "the argc count and argv ordered array of zero-terminated command strings supplied to main",
+   "aliases": [
+    "argument count",
+    "argument vector",
+    "argc",
+    "argv"
+   ],
+   "intuition": "the six shell words in ./tiny-agenc train --data tiny.txt --steps 12 arrive in numbered slots zero through five; shifting the pointer gives the chosen parser a smaller view beginning at train",
+   "anchor": "self"
+  },
+  "process-exit-status": {
+   "owner": 2,
+   "depends_on": [
+    "fatal-error-policy"
+   ],
+   "definition": "the process result returned to the invoking shell or script, with success for a completed request and failure for a refused or incomplete one",
+   "aliases": [
+    "exit status",
+    "failure status",
+    "success status"
+   ],
+   "intuition": "when allocation makes the command unable to continue, die reaches exit(EXIT_FAILURE) once and no caller can accidentally resume after the fatal diagnostic",
+   "anchor": "self"
+  },
+  "command-line-dispatch": {
+   "owner": 14,
+   "depends_on": [],
+   "definition": "select exactly one command grammar from the first argument, or answer an exact top-level information form or reject the request",
+   "aliases": [
+    "command dispatch"
+   ],
+   "intuition": "the required train or sample grammar removes the guesswork that a flat mixture of corpus, checkpoint, learning, and prompt flags would create",
+   "anchor": "self"
+  },
+  "conversion-end-pointer": {
+   "owner": 14,
+   "depends_on": [
+    "pointer"
+   ],
+   "definition": "the address a C string-to-number converter writes for the first byte it did not consume",
+   "aliases": [
+    "conversion end pointer",
+    "end pointer"
+   ],
+   "intuition": "strtol can return 12 for 12oops, but the pointer landing on o exposes that the requested integer did not use the whole string",
+   "anchor": "self"
+  },
+  "errno-range-signal": {
+   "owner": 14,
+   "depends_on": [],
+   "definition": "the reset-call-check protocol in which a library conversion records an out-of-range result by setting errno to ERANGE",
+   "aliases": [
+    "errno",
+    "ERANGE",
+    "errno range signal"
+   ],
+   "intuition": "clear yesterday's library error to zero, call strtoull, then accept the range signal only if that call changed errno to ERANGE",
+   "anchor": "self"
+  },
+  "whole-string-numeric-parsing": {
+   "owner": 14,
+   "depends_on": [
+    "conversion-end-pointer"
+   ],
+   "definition": "convert a command string only when it is nonempty, every byte is consumed by the value's grammar, and the result satisfies that flag's range policy",
+   "aliases": [
+    "whole-string numeric parsing"
+   ],
+   "intuition": "a useful numeric prefix is still a bad command value: 12 ends at the zero byte and passes, while 12oops leaves o behind and fails",
+   "anchor": "self"
+  },
+  "command-line-option-parsing": {
+   "owner": 14,
+   "depends_on": [
+    "command-line-dispatch",
+    "struct",
+    "switch-statement",
+    "whole-string-numeric-parsing"
+   ],
+   "definition": "start one typed command record from defaults, replace its fields from recognized options in encounter order, reject leftovers, then hand off the completed record",
+   "aliases": [
+    "command-line option parsing",
+    "option parsing",
+    "getopt_long",
+    "optarg",
+    "optind",
+    "opterr"
+   ],
+   "intuition": "both --steps 20 --data tiny.txt and the reverse order fill the same TrainOptions fields before any training work begins",
+   "anchor": "self"
+  },
+  "file-metadata-query": {
+   "owner": 13,
+   "depends_on": [
+    "struct-member-access"
+   ],
+   "definition": "the stat call that resolves a path and fills a struct stat record with operating-system metadata about the existing filesystem object",
+   "aliases": [
+    "file metadata",
+    "struct stat",
+    "stat"
+   ],
+   "intuition": "before replacing a checkpoint, stat fills existing.st_mode so the adjacent temporary can preserve the destination's permission bits; failure leaves the private creation mode in place",
+   "anchor": "self"
+  },
+  "filesystem-link-alias": {
+   "owner": 14,
+   "depends_on": [
+    "file-metadata-query"
+   ],
+   "definition": "distinct path text that identifies the same existing filesystem object, either as another hard-link name or by resolving a symbolic link",
+   "aliases": [
+    "filesystem link alias",
+    "filesystem link aliases",
+    "hard link",
+    "hard-link",
+    "symbolic link",
+    "symlink"
+   ],
+   "intuition": "corpus.txt and corpus-link.txt have different spelling, yet stat can resolve both to device 8 and inode 42017",
+   "anchor": "self"
+  },
+  "filesystem-object-identity": {
+   "owner": 14,
+   "depends_on": [
+    "file-metadata-query",
+    "filesystem-link-alias",
+    "struct-member-access"
+   ],
+   "definition": "equality of the device and inode metadata returned when two existing path names are resolved by stat",
+   "aliases": [
+    "filesystem object identity",
+    "file identity"
+   ],
+   "intuition": "corpus.txt and corpus-link.txt can have different spelling yet resolve to the same device-and-inode pair; the CLI conservatively requires output, training, and validation roles to name distinct objects before work begins",
+   "anchor": "self"
+  },
+  "command-setup-preflight": {
+   "owner": 14,
+   "depends_on": [
+    "bounded-file-read",
+    "dataset",
+    "filesystem-object-identity",
+    "data-leakage",
+    "model-configuration-validity",
+    "model-memory-report",
+    "tokenizer",
+    "validation-split"
+   ],
+   "definition": "stage recoverable path, corpus, vocabulary, geometry, and model-memory checks before model construction and the long-running command body",
+   "aliases": [
+    "setup preflight",
+    "command preflight"
+   ],
+   "intuition": "narrow checked options through path aliases, bounded bytes, one shared alphabet, complete windows, compatible geometry, and a model-buffer report before model_new",
+   "anchor": "self"
+  },
+  "sample-command-setup": {
+   "owner": 14,
+   "depends_on": [
+    "allocation",
+    "checkpoint",
+    "tokenizer",
+    "whole-string-numeric-parsing"
+   ],
+   "definition": "load a checkpoint and tokenizer, prepare a newline plus known prompt ids and a seeded RNG, then hand checked bounds and objects to the still-opaque sampling operation",
+   "aliases": [
+    "sample-command setup",
+    "sampling setup"
+   ],
+   "intuition": "the checkpoint supplies a matched model and alphabet; one reserved newline and all known prompt bytes precede the requested generated tail, while Chapter 16 owns how each new id is chosen",
+   "anchor": "self"
+  },
+  "cli-stream-routing": {
+   "owner": 14,
+   "depends_on": [
+    "process-exit-status"
+   ],
+   "definition": "the public assignment of generated text and successful information or narration to standard output, and diagnostics or the sampling banner to standard error",
+   "aliases": [
+    "stream routing",
+    "stream contract"
+   ],
+   "intuition": "redirecting sample stdout writes only continuation text while the architecture banner remains visible on stderr",
+   "anchor": "self"
+  },
+  "line-buffering-request": {
+   "owner": 14,
+   "depends_on": [
+    "cli-stream-routing"
+   ],
+   "definition": "the best-effort setvbuf request that asks standard output to send completed training lines onward without waiting for a large full buffer",
+   "aliases": [
+    "line-buffering request",
+    "line buffering",
+    "setvbuf",
+    "_IOLBF"
+   ],
+   "intuition": "a person tailing a redirected training log should receive each newline-terminated progress report while the run is active, although this program ignores a setvbuf failure",
+   "anchor": "self"
+  },
+  "environment-variable-lookup": {
+   "owner": 14,
+   "depends_on": [
+    "command-environment-assignment"
+   ],
+   "definition": "use getenv to ask whether an inherited environment name is present, receiving a pointer to its text value or NULL when absent without validating that value",
+   "aliases": [
+    "environment-variable lookup",
+    "environment variable lookup",
+    "getenv"
+   ],
+   "intuition": "OMP_NUM_THREADS=4 supplies an operator choice to one run; a non-null getenv result tells Tiny AgenC to leave interpretation and thread selection to the OpenMP runtime",
+   "anchor": "self"
+  },
+  "runtime-thread-default": {
+   "owner": 14,
+   "depends_on": [
+    "environment-variable-lookup",
+    "openmp"
+   ],
+   "definition": "the program's OpenMP fallback that requests half the reported available processors only when OMP_NUM_THREADS is absent and the half is positive",
+   "aliases": [
+    "runtime thread default",
+    "thread-count default",
+    "OMP_NUM_THREADS",
+    "omp_get_num_procs",
+    "omp_set_num_threads"
+   ],
+   "intuition": "the measured 64-thread machine performed better with 32, but any environment choice belongs to the operator and suppresses the program fallback",
+   "anchor": "self"
+  },
+  "switch-statement": {
+   "owner": 14,
+   "depends_on": [],
+   "definition": "a C multiway selection in which one switch value chooses a matching case or the default branch, and break prevents execution from continuing into the next case",
+   "aliases": [
+    "switch statement"
+   ],
+   "intuition": "the compact letter returned by getopt_long selects exactly one TrainOptions assignment; break leaves that assignment branch before the next label",
+   "anchor": "self"
+  },
+  "command-line-boundary": {
+   "owner": 14,
+   "depends_on": [
+    "cli-stream-routing",
+    "command-line-option-parsing",
+    "command-setup-preflight",
+    "sample-command-setup",
+    "runtime-thread-default"
+   ],
+   "definition": "the bidirectional layer that narrows untrusted command words, paths, and environment through typed parsing and defensive setup, refuses detected problems, routes successful output and diagnostics, and returns a process status",
+   "aliases": [
+    "command-line boundary"
+   ],
+   "intuition": "12oops, known file aliases, unknown validation bytes, and impossible memory requests are refused before long-running work; admitted paths and text still face their owning file, checkpoint, and tokenizer checks, while generated text and diagnostics leave on separate streams",
+   "anchor": "self"
+  },
+  "remainder-operator": {
+   "owner": 1,
+   "depends_on": [],
+   "definition": "the C percent operator on integers, which returns the remainder left after division and therefore returns zero for an exact multiple",
+   "aliases": [
+    "remainder operator"
+   ],
+   "intuition": "four divides into groups of two with nothing left, so 4 % 2 is zero and the geometry divides evenly",
+   "anchor": "self"
+  },
+  "training-loop": {
+   "owner": 15,
+   "previews": {
+    "0": "the repeated batch-to-update cycle that Chapter 15 will close",
+    "12": "the caller that will place zero, forward, backward, and update in the verified order",
+    "14": "the long-running body that replaces the learner-only no-update scaffold"
+   },
+   "depends_on": [
+    "command-setup-preflight",
+    "dataset",
+    "model-backward-wiring",
+    "step"
+   ],
+   "definition": "the repeated command-level sequence that draws one batch, clears gradient destinations, runs one target-bearing forward and its immediately matching backward, applies one checked model update, then performs due observation work only after that update",
+   "aliases": [
+    "training loop",
+    "learning loop"
+   ],
+   "intuition": "deal one batch of flashcards, erase old correction marks, grade it, send corrections back, move the adjustable numbers, then deal again",
+   "anchor": "flashcards"
+  },
+  "fixed-batch-memorization-test": {
+   "owner": 15,
+   "depends_on": [
+    "loss",
+    "training-loop"
+   ],
+   "definition": "reuse one unchanged input-and-target batch through many training steps and require finite loss to fall sharply, as an assembled-learning-path witness rather than a held-out quality claim",
+   "aliases": [
+    "fixed-batch memorization test",
+    "fixed-batch test",
+    "one-batch overfit test",
+    "overfit test"
+   ],
+   "intuition": "show the same small stack of flashcards until the model can remember them; failure exposes a broken learning path, while success says nothing about unseen cards",
+   "anchor": "flashcards"
+  },
+  "fixed-validation-batches": {
+   "owner": 15,
+   "previews": {
+    "3": "Chapter 15 will draw validation windows once and reuse them across reports"
+   },
+   "depends_on": [
+    "sampling-with-replacement",
+    "seed",
+    "validation-split"
+   ],
+   "definition": "a small collection of held-out input-and-target windows drawn once from a dedicated seeded RNG and reused at every validation report",
+   "aliases": [
+    "fixed validation batch",
+    "fixed validation batches",
+    "fixed validation windows"
+   ],
+   "intuition": "deal held-aside flashcards once and keep those same cards on the desk so report-to-report changes come from the model rather than new cards",
+   "anchor": "flashcards"
+  },
+  "held-out-evaluation": {
+   "owner": 15,
+   "depends_on": [
+    "fixed-validation-batches",
+    "forward-pass",
+    "loss",
+    "validation-split"
+   ],
+   "definition": "measure mean loss on held-aside examples with target-bearing forward calls but no backward call or parameter update",
+   "aliases": [
+    "held-out evaluation",
+    "validation measurement",
+    "validation loss"
+   ],
+   "intuition": "grade the fixed cards behind the no-peeking line, record the grade, and never send its corrections back",
+   "anchor": "no-peeking"
+  },
+  "generalization": {
+   "owner": 15,
+   "depends_on": [
+    "held-out-evaluation",
+    "training-split",
+    "validation-split"
+   ],
+   "definition": "predictive improvement learned from update-eligible examples also reduces loss on examples withheld from updates",
+   "aliases": [
+    "generalization"
+   ],
+   "intuition": "corrections learned from the training-side flashcards also improve grades on cards kept behind the no-peeking boundary",
+   "anchor": "no-peeking"
+  },
+  "overfitting": {
+   "owner": 15,
+   "depends_on": [
+    "generalization",
+    "loss"
+   ],
+   "definition": "continued improvement on training examples that does not transfer to held-out examples, observed when training loss falls while held-out loss stalls or rises",
+   "aliases": [
+    "overfitting",
+    "overfit",
+    "overfits",
+    "overfitted"
+   ],
+   "intuition": "the model remembers details on the allowed flashcards while its grades stop improving on cards behind the no-peeking line",
+   "anchor": "no-peeking"
+  },
+  "training-observation-isolation": {
+   "owner": 15,
+   "depends_on": [
+    "checkpoint",
+    "fixed-validation-batches",
+    "latest-forward-record",
+    "randomness",
+    "training-loop"
+   ],
+   "definition": "reporting, held-out measurement, progress text, and checkpoint saves run only after the current update and neither consume the batch RNG nor apply another parameter update",
+   "aliases": [
+    "reporting without steering",
+    "observation isolation"
+   ],
+   "intuition": "inspect a completed step from a separate desk, then draw the next training flashcards from the untouched batch handle",
+   "anchor": "flashcards"
+  },
+  "training-step-timing": {
+   "owner": 15,
+   "previews": {
+    "0": "the ms/step estimate whose exact timed region Chapter 15 will open"
+   },
+   "depends_on": [
+    "monotonic-clock",
+    "step",
+    "training-observation-isolation"
+   ],
+   "definition": "the mean elapsed time per completed core training step since the last clock reset, stopped before validation and reporting and reset after every excluded side effect",
+   "aliases": [
+    "training-step timing",
+    "timed training window",
+    "ms/step"
+   ],
+   "intuition": "time only completed batch-to-update cycles, then restart the stopwatch after inspection, progress text, or file output",
+   "anchor": "self"
+  },
+  "trigram": {
+   "owner": "appendix-c",
+   "depends_on": [
+    "token",
+    "bigram"
+   ],
+   "definition": "an ordered run of three adjacent tokens; in the capstone comparator the first two select a count row and the third is the next-token answer",
+   "aliases": [
+    "trigram",
+    "trigrams"
+   ],
+   "intuition": "use the previous two token ids, rather than one, as the address of the next-answer count row",
+   "anchor": "self"
+  },
+  "backoff": {
+   "owner": "appendix-c",
+   "depends_on": [
+    "trigram",
+    "bigram",
+    "add-one-smoothing"
+   ],
+   "definition": "a fixed fallback from an unavailable longer-context count row to a shorter-context prediction rule",
+   "aliases": [
+    "backoff"
+   ],
+   "intuition": "when the two-byte row is absent, consult the final byte's add-one bet sheet instead",
+   "anchor": "bet-sheet"
+  },
+  "key-value-cache": {
+   "owner": "appendix-c",
+   "previews": {
+    "16": "retain earlier key and value calculations before eviction; Appendix C owns the state-management construction"
+   },
+   "depends_on": [
+    "query-key-value",
+    "causality",
+    "sliding-context-window",
+    "ownership-lifetime"
+   ],
+   "definition": "temporary inference state that retains each layer's earlier attention key and value rows so an unchanged prefix need not be projected again",
+   "aliases": [
+    "key-value cache",
+    "key-value caches",
+    "KV cache",
+    "KV caches"
+   ],
+   "intuition": "retain each earlier position's advertisement and cargo while the growing prefix leaves their meanings unchanged",
+   "anchor": "consulting"
+  },
+  "rotary-position-embedding": {
+   "owner": "appendix-c",
+   "depends_on": [
+    "query-key-value",
+    "head-size",
+    "circle-angle",
+    "sine-cosine"
+   ],
+   "definition": "a position mechanism that rotates adjacent query and key channel pairs by scheduled angles inside each attention head",
+   "aliases": [
+    "rotary position embedding",
+    "RoPE"
+   ],
+   "intuition": "rotate each head's question and advertisement by their local positions so their match depends on the angle between them",
+   "anchor": "consulting"
+  },
+  "byte-pair-encoding": {
+   "owner": "appendix-c",
+   "previews": {
+    "18": "a variable-length-token capstone linked forward to Appendix C"
+   },
+   "depends_on": [
+    "subword-token",
+    "tokenization",
+    "vocabulary",
+    "id",
+    "serialization"
+   ],
+   "definition": "deterministic tokenization that repeatedly replaces the most frequent adjacent token pair and records the ranked merge program",
+   "aliases": [
+    "byte-pair encoding",
+    "BPE"
+   ],
+   "intuition": "replace recurring neighboring byte pieces with one reusable id, then replay the same ranked replacements on new bytes",
+   "anchor": "self"
+  },
+  "nats-per-byte": {
+   "owner": "appendix-c",
+   "previews": {
+    "18": "variable-length tokens require matched units for fair loss comparison; Appendix C builds the exact unit"
+   },
+   "depends_on": [
+    "cross-entropy",
+    "logarithm",
+    "subword-token"
+   ],
+   "definition": "the total natural-log next-token penalty divided by the exact number of target bytes covered by those predicted tokens",
+   "aliases": [
+    "nats per byte"
+   ],
+   "intuition": "add the complete penalty bill, count the bytes whose answers incurred it, and divide once",
+   "anchor": "self"
+  },
+  "scaling-law": {
+   "owner": "appendix-c",
+   "depends_on": [
+    "parameter",
+    "held-out-evaluation",
+    "training-step-timing"
+   ],
+   "definition": "an empirical relationship fitted across changes in model, data, or training scale under declared measurement rules",
+   "aliases": [
+    "scaling law",
+    "scaling laws"
+   ],
+   "intuition": "many controlled measurements can trace a recurring size-to-result relationship; three tiny widths supply only three local points",
+   "anchor": "self"
+  },
+  "median": {
+   "owner": "appendix-c",
+   "depends_on": [],
+   "definition": "the middle value after an odd-sized collection of measurements has been sorted",
+   "aliases": [
+    "median",
+    "medians"
+   ],
+   "intuition": "put repeated timings in order and select the one with the same number of timings on either side",
+   "anchor": "self"
+  }
+ },
+ "written_chapters": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  15,
+  16,
+  17,
+  18
+ ],
+ "written_appendices": [
+  "appendix-a",
+  "appendix-b",
+  "appendix-c"
+ ],
+ "metaphors": {
+  "notes": {
+   "established": 1,
+   "summary": "rows are the model's running notes about each position, amended never replaced",
+   "markers": [
+    "notes"
+   ]
+  },
+  "bet-sheet": {
+   "established": 1,
+   "summary": "a probability distribution is an 80-line bet sheet on the next character",
+   "markers": [
+    "bet sheet",
+    "bet"
+   ]
+  },
+  "no-peeking": {
+   "established": 1,
+   "summary": "the next character is the graded answer; no bet may read ahead",
+   "markers": [
+    "no-peeking",
+    "read ahead",
+    "peeking"
+   ]
+  },
+  "highway": {
+   "established": 1,
+   "summary": "the residual stream is an unobstructed highway; blocks add edits, never rewrites",
+   "markers": [
+    "highway"
+   ]
+  },
+  "consulting": {
+   "established": 1,
+   "summary": "attention as positions consulting each other: question, advertisement, cargo",
+   "markers": [
+    "consult",
+    "advertises",
+    "cargo"
+   ]
+  },
+  "volume-knob": {
+   "established": 1,
+   "summary": "layernorm always normalizes; its learned gain-and-bias volume knob starts neutral",
+   "markers": [
+    "volume knob"
+   ]
+  },
+  "flashcards": {
+   "established": 3,
+   "summary": "dataset windows are flashcards whose question is a token row and whose answer is the same row shifted forward",
+   "markers": [
+    "flashcard",
+    "flashcards"
+   ]
+  }
+ }
+}

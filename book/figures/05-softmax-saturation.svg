@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640" role="img" aria-labelledby="title desc">
+  <title id="title">Softmax saturation as a score gap grows</title>
+  <desc id="desc">For the two scores gap and zero, the plot shows the higher score probability approaching one and the lower score probability approaching zero at six fixed gaps.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #17233d; }
+    .title { font-size: 24px; font-weight: 700; }
+    .subtitle { font-size: 14px; fill: #5d6878; }
+    .tick { font-size: 12px; fill: #5d6878; }
+    .axis-label { font-size: 14px; font-weight: 650; }
+    .legend { font-size: 13px; font-weight: 650; }
+    .table-label { font-size: 12px; font-weight: 650; }
+    .table-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .grid { stroke: #d8dee9; stroke-width: 1; }
+    .axis { stroke: #7a8699; stroke-width: 1.5; }
+    .table-line { stroke: #d8dee9; stroke-width: 1; }
+  </style>
+  <rect width="960" height="640" fill="#ffffff"/>
+  <text x="86.00" y="38.00" class="title" text-anchor="start">A larger score gap pushes softmax toward 0 and 1</text>
+  <text x="86.00" y="67.00" class="subtitle" text-anchor="start">Fixed inputs [gap, 0]; each pair of probabilities sums to 1</text>
+  <line x1="86.00" y1="94" x2="120.00" y2="94" stroke="#225fc7" stroke-width="3.25"/>
+  <text x="129.00" y="98.00" class="legend" text-anchor="start">higher score</text>
+  <line x1="264.00" y1="94" x2="298.00" y2="94" stroke="#c66708" stroke-width="3.25"/>
+  <text x="307.00" y="98.00" class="legend" text-anchor="start">lower score</text>
+  <text x="926.00" y="112.00" class="axis-label" text-anchor="end">probability</text>
+  <line x1="86.00" y1="444.00" x2="926.00" y2="444.00" class="grid"/>
+  <text x="74.00" y="448.00" class="tick" text-anchor="end">0</text>
+  <line x1="86.00" y1="363.50" x2="926.00" y2="363.50" class="grid"/>
+  <text x="74.00" y="367.50" class="tick" text-anchor="end">0.25</text>
+  <line x1="86.00" y1="283.00" x2="926.00" y2="283.00" class="grid"/>
+  <text x="74.00" y="287.00" class="tick" text-anchor="end">0.5</text>
+  <line x1="86.00" y1="202.50" x2="926.00" y2="202.50" class="grid"/>
+  <text x="74.00" y="206.50" class="tick" text-anchor="end">0.75</text>
+  <line x1="86.00" y1="122.00" x2="926.00" y2="122.00" class="grid"/>
+  <text x="74.00" y="126.00" class="tick" text-anchor="end">1</text>
+  <line x1="86.00" y1="122.00" x2="86.00" y2="444.00" class="grid"/>
+  <text x="86.00" y="467.00" class="tick" text-anchor="middle">0</text>
+  <line x1="156.00" y1="122.00" x2="156.00" y2="444.00" class="grid"/>
+  <text x="156.00" y="467.00" class="tick" text-anchor="middle">1</text>
+  <line x1="226.00" y1="122.00" x2="226.00" y2="444.00" class="grid"/>
+  <text x="226.00" y="467.00" class="tick" text-anchor="middle">2</text>
+  <line x1="366.00" y1="122.00" x2="366.00" y2="444.00" class="grid"/>
+  <text x="366.00" y="467.00" class="tick" text-anchor="middle">4</text>
+  <line x1="646.00" y1="122.00" x2="646.00" y2="444.00" class="grid"/>
+  <text x="646.00" y="467.00" class="tick" text-anchor="middle">8</text>
+  <line x1="926.00" y1="122.00" x2="926.00" y2="444.00" class="grid"/>
+  <text x="926.00" y="467.00" class="tick" text-anchor="middle">12</text>
+  <line x1="86.00" y1="444.00" x2="926.00" y2="444.00" class="axis"/>
+  <line x1="86.00" y1="122.00" x2="86.00" y2="444.00" class="axis"/>
+  <polyline points="86.00,283.00 156.00,208.60 226.00,160.38 366.00,127.79 646.00,122.11 926.00,122.00" fill="none" stroke="#225fc7" stroke-width="3.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="86.00,283.00 156.00,357.40 226.00,405.62 366.00,438.21 646.00,443.89 926.00,444.00" fill="none" stroke="#c66708" stroke-width="3.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="86.00" cy="283.00" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="156.00" cy="208.60" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="226.00" cy="160.38" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="366.00" cy="127.79" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="646.00" cy="122.11" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="926.00" cy="122.00" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="86.00" cy="283.00" r="4.5" fill="#ffffff" stroke="#c66708" stroke-width="2.5"/>
+  <circle cx="156.00" cy="357.40" r="4.5" fill="#ffffff" stroke="#c66708" stroke-width="2.5"/>
+  <circle cx="226.00" cy="405.62" r="4.5" fill="#ffffff" stroke="#c66708" stroke-width="2.5"/>
+  <circle cx="366.00" cy="438.21" r="4.5" fill="#ffffff" stroke="#c66708" stroke-width="2.5"/>
+  <circle cx="646.00" cy="443.89" r="4.5" fill="#ffffff" stroke="#c66708" stroke-width="2.5"/>
+  <circle cx="926.00" cy="444.00" r="4.5" fill="#ffffff" stroke="#c66708" stroke-width="2.5"/>
+  <text x="926.00" y="496.00" class="axis-label" text-anchor="end">score gap</text>
+  <rect x="86.00" y="512.00" width="840.00" height="102.00" rx="5" fill="#f6f8fb" stroke="#d8dee9"/>
+  <line x1="86.00" y1="546.00" x2="926.00" y2="546.00" class="table-line"/>
+  <line x1="86.00" y1="580.00" x2="926.00" y2="580.00" class="table-line"/>
+  <line x1="218.00" y1="512.00" x2="218.00" y2="614.00" class="table-line"/>
+  <line x1="336.00" y1="512.00" x2="336.00" y2="614.00" class="table-line"/>
+  <line x1="454.00" y1="512.00" x2="454.00" y2="614.00" class="table-line"/>
+  <line x1="572.00" y1="512.00" x2="572.00" y2="614.00" class="table-line"/>
+  <line x1="690.00" y1="512.00" x2="690.00" y2="614.00" class="table-line"/>
+  <line x1="808.00" y1="512.00" x2="808.00" y2="614.00" class="table-line"/>
+  <text x="98.00" y="534.00" class="table-label" text-anchor="start">gap</text>
+  <text x="98.00" y="568.00" class="table-label" text-anchor="start">higher p</text>
+  <text x="98.00" y="602.00" class="table-label" text-anchor="start">lower p</text>
+  <text x="277.00" y="534.00" class="table-value" text-anchor="middle">0</text>
+  <text x="277.00" y="568.00" class="table-value" text-anchor="middle">0.500000</text>
+  <text x="277.00" y="602.00" class="table-value" text-anchor="middle">0.500000</text>
+  <text x="395.00" y="534.00" class="table-value" text-anchor="middle">1</text>
+  <text x="395.00" y="568.00" class="table-value" text-anchor="middle">0.731059</text>
+  <text x="395.00" y="602.00" class="table-value" text-anchor="middle">0.268941</text>
+  <text x="513.00" y="534.00" class="table-value" text-anchor="middle">2</text>
+  <text x="513.00" y="568.00" class="table-value" text-anchor="middle">0.880797</text>
+  <text x="513.00" y="602.00" class="table-value" text-anchor="middle">0.119203</text>
+  <text x="631.00" y="534.00" class="table-value" text-anchor="middle">4</text>
+  <text x="631.00" y="568.00" class="table-value" text-anchor="middle">0.982014</text>
+  <text x="631.00" y="602.00" class="table-value" text-anchor="middle">0.017986</text>
+  <text x="749.00" y="534.00" class="table-value" text-anchor="middle">8</text>
+  <text x="749.00" y="568.00" class="table-value" text-anchor="middle">0.999665</text>
+  <text x="749.00" y="602.00" class="table-value" text-anchor="middle">0.000335</text>
+  <text x="867.00" y="534.00" class="table-value" text-anchor="middle">12</text>
+  <text x="867.00" y="568.00" class="table-value" text-anchor="middle">0.999994</text>
+  <text x="867.00" y="602.00" class="table-value" text-anchor="middle">0.000006</text>
+</svg>

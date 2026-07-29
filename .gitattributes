@@ -1,0 +1,19 @@
+* text=auto
+
+*.bin binary
+*.c text eol=lf
+*.cff text eol=lf
+*.h text eol=lf
+*.log text eol=lf
+*.md text eol=lf
+*.sha256 text eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Makefile text eol=lf
+LICENSE text eol=lf
+VERSION text eol=lf
+NOTICE text eol=lf
+
+*.bin binary

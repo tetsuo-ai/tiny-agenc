@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="650" viewBox="0 0 1040 650" role="img" aria-labelledby="title desc">
+  <title id="title">Causal attention weights for three positions</title>
+  <desc id="desc">A lower triangular heatmap computed from the three-position query, key, and value fixture in labs/check05.c. Future cells are marked not read.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #17233d; }
+    .title { font-size: 24px; font-weight: 700; }
+    .subtitle { font-size: 14px; fill: #5d6878; }
+    .header-main { font-size: 14px; font-weight: 700; }
+    .header-detail { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; fill: #5d6878; }
+    .row-main { font-size: 14px; font-weight: 700; }
+    .row-detail { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+    .cell-label { font-size: 12px; font-weight: 650; }
+    .cell-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; font-weight: 700; }
+    .cell-label-light { font-size: 12px; font-weight: 650; fill: #ffffff; }
+    .cell-value-light { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; font-weight: 700; fill: #ffffff; }
+    .unused { font-size: 12px; font-weight: 650; fill: #5d6878; }
+    .output-label { font-size: 12px; fill: #5d6878; }
+    .output-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 700; }
+    .footer { font-size: 13px; fill: #5d6878; }
+  </style>
+  <rect width="1040" height="650" fill="#ffffff"/>
+  <text x="40.00" y="39.00" class="title" text-anchor="start">A position can mix values only from itself and its past</text>
+  <text x="40.00" y="69.00" class="subtitle" text-anchor="start">Fixture head size 2; every query-key dot product is scaled by 1/sqrt(2)</text>
+  <rect x="40.00" y="112.00" width="960.00" height="472.00" rx="6" fill="#ffffff" stroke="#cbd3df"/>
+  <rect x="40.00" y="112.00" width="180.00" height="94.00" rx="0" fill="#f4f7fb" stroke="#cbd3df"/>
+  <text x="130.00" y="149.00" class="header-main" text-anchor="middle">query position</text>
+  <text x="130.00" y="175.00" class="header-detail" text-anchor="middle">Q vector</text>
+  <rect x="220.00" y="112.00" width="190.00" height="94.00" rx="0" fill="#f4f7fb" stroke="#cbd3df"/>
+  <text x="315.00" y="149.00" class="header-main" text-anchor="middle">source t2 = 0</text>
+  <text x="315.00" y="175.00" class="header-detail" text-anchor="middle">K=[1, 0]  V=[2, 1]</text>
+  <rect x="410.00" y="112.00" width="190.00" height="94.00" rx="0" fill="#f4f7fb" stroke="#cbd3df"/>
+  <text x="505.00" y="149.00" class="header-main" text-anchor="middle">source t2 = 1</text>
+  <text x="505.00" y="175.00" class="header-detail" text-anchor="middle">K=[0, 1]  V=[4, 3]</text>
+  <rect x="600.00" y="112.00" width="190.00" height="94.00" rx="0" fill="#f4f7fb" stroke="#cbd3df"/>
+  <text x="695.00" y="149.00" class="header-main" text-anchor="middle">source t2 = 2</text>
+  <text x="695.00" y="175.00" class="header-detail" text-anchor="middle">K=[1, 1]  V=[8, 7]</text>
+  <rect x="790.00" y="112.00" width="210.00" height="94.00" rx="0" fill="#f4f7fb" stroke="#cbd3df"/>
+  <text x="895.00" y="149.00" class="header-main" text-anchor="middle">weighted output</text>
+  <text x="895.00" y="175.00" class="header-detail" text-anchor="middle">sum(weight * V)</text>
+  <rect x="40.00" y="206.00" width="180.00" height="126.00" rx="0" fill="#f4f7fb" stroke="#cbd3df"/>
+  <text x="58.00" y="255.00" class="row-main" text-anchor="start">query t = 0</text>
+  <text x="58.00" y="283.00" class="row-detail" text-anchor="start">Q=[1, 0]</text>
+  <rect x="220.00" y="206.00" width="190.00" height="126.00" rx="0" fill="#1d4ed8" stroke="#cbd3df"/>
+  <text x="315.00" y="255.00" class="cell-label-light" text-anchor="middle">softmax weight</text>
+  <text x="315.00" y="284.00" class="cell-value-light" text-anchor="middle">1.000000</text>
+  <rect x="410.00" y="206.00" width="190.00" height="126.00" rx="0" fill="#f5f6f8" stroke="#cbd3df"/>
+  <line x1="420.00" y1="216.00" x2="590.00" y2="322.00" stroke="#d7dce4" stroke-width="2"/>
+  <line x1="590.00" y1="216.00" x2="420.00" y2="322.00" stroke="#d7dce4" stroke-width="2"/>
+  <text x="505.00" y="261.00" class="unused" text-anchor="middle">future position</text>
+  <text x="505.00" y="284.00" class="unused" text-anchor="middle">not read</text>
+  <rect x="600.00" y="206.00" width="190.00" height="126.00" rx="0" fill="#f5f6f8" stroke="#cbd3df"/>
+  <line x1="610.00" y1="216.00" x2="780.00" y2="322.00" stroke="#d7dce4" stroke-width="2"/>
+  <line x1="780.00" y1="216.00" x2="610.00" y2="322.00" stroke="#d7dce4" stroke-width="2"/>
+  <text x="695.00" y="261.00" class="unused" text-anchor="middle">future position</text>
+  <text x="695.00" y="284.00" class="unused" text-anchor="middle">not read</text>
+  <rect x="790.00" y="206.00" width="210.00" height="126.00" rx="0" fill="#f1f8f5" stroke="#cbd3df"/>
+  <text x="895.00" y="255.00" class="output-label" text-anchor="middle">output t = 0</text>
+  <text x="895.00" y="284.00" class="output-value" text-anchor="middle">[2.00000, 1.00000]</text>
+  <rect x="40.00" y="332.00" width="180.00" height="126.00" rx="0" fill="#f4f7fb" stroke="#cbd3df"/>
+  <text x="58.00" y="381.00" class="row-main" text-anchor="start">query t = 1</text>
+  <text x="58.00" y="409.00" class="row-detail" text-anchor="start">Q=[0, 1]</text>
+  <rect x="220.00" y="332.00" width="190.00" height="126.00" rx="0" fill="#aabff2" stroke="#cbd3df"/>
+  <text x="315.00" y="381.00" class="cell-label" text-anchor="middle">softmax weight</text>
+  <text x="315.00" y="410.00" class="cell-value" text-anchor="middle">0.330238</text>
+  <rect x="410.00" y="332.00" width="190.00" height="126.00" rx="0" fill="#6285e5" stroke="#cbd3df"/>
+  <text x="505.00" y="381.00" class="cell-label-light" text-anchor="middle">softmax weight</text>
+  <text x="505.00" y="410.00" class="cell-value-light" text-anchor="middle">0.669762</text>
+  <rect x="600.00" y="332.00" width="190.00" height="126.00" rx="0" fill="#f5f6f8" stroke="#cbd3df"/>
+  <line x1="610.00" y1="342.00" x2="780.00" y2="448.00" stroke="#d7dce4" stroke-width="2"/>
+  <line x1="780.00" y1="342.00" x2="610.00" y2="448.00" stroke="#d7dce4" stroke-width="2"/>
+  <text x="695.00" y="387.00" class="unused" text-anchor="middle">future position</text>
+  <text x="695.00" y="410.00" class="unused" text-anchor="middle">not read</text>
+  <rect x="790.00" y="332.00" width="210.00" height="126.00" rx="0" fill="#f1f8f5" stroke="#cbd3df"/>
+  <text x="895.00" y="381.00" class="output-label" text-anchor="middle">output t = 1</text>
+  <text x="895.00" y="410.00" class="output-value" text-anchor="middle">[3.33952, 2.33952]</text>
+  <rect x="40.00" y="458.00" width="180.00" height="126.00" rx="0" fill="#f4f7fb" stroke="#cbd3df"/>
+  <text x="58.00" y="507.00" class="row-main" text-anchor="start">query t = 2</text>
+  <text x="58.00" y="535.00" class="row-detail" text-anchor="start">Q=[1, 1]</text>
+  <rect x="220.00" y="458.00" width="190.00" height="126.00" rx="0" fill="#bbccf5" stroke="#cbd3df"/>
+  <text x="315.00" y="507.00" class="cell-label" text-anchor="middle">softmax weight</text>
+  <text x="315.00" y="536.00" class="cell-value" text-anchor="middle">0.248255</text>
+  <rect x="410.00" y="458.00" width="190.00" height="126.00" rx="0" fill="#bbccf5" stroke="#cbd3df"/>
+  <text x="505.00" y="507.00" class="cell-label" text-anchor="middle">softmax weight</text>
+  <text x="505.00" y="536.00" class="cell-value" text-anchor="middle">0.248255</text>
+  <rect x="600.00" y="458.00" width="190.00" height="126.00" rx="0" fill="#85a1eb" stroke="#cbd3df"/>
+  <text x="695.00" y="507.00" class="cell-label" text-anchor="middle">softmax weight</text>
+  <text x="695.00" y="536.00" class="cell-value" text-anchor="middle">0.503490</text>
+  <rect x="790.00" y="458.00" width="210.00" height="126.00" rx="0" fill="#f1f8f5" stroke="#cbd3df"/>
+  <text x="895.00" y="507.00" class="output-label" text-anchor="middle">output t = 2</text>
+  <text x="895.00" y="536.00" class="output-value" text-anchor="middle">[5.51745, 4.51745]</text>
+  <text x="40.00" y="619.00" class="footer" text-anchor="start">Each used row sums to 1. Future cells are never scored or passed to softmax.</text>
+</svg>

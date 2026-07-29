@@ -1,0 +1,246 @@
+# Complete stdout from the full-corpus showcase run.
+# Machine: AMD Ryzen Threadripper PRO 9975WX 32-Cores
+# CPU topology: 64 logical / 32 physical (2 threads per core)
+# Compiler: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+# Build: OPENMP=1; OMP_NUM_THREADS unset; program default 32
+# Source SHA-256 (SHA-256 of sorted src file hashes):
+#   46c88bbcb83af0b52c103d7a5e70540b546dffff81a752139e25b8b1ce0cca5e
+# Executable SHA-256:
+#   b86086c42993fb6f64ffdcad6c0315555984b619855f12251b54368719967557
+# Corpus SHA-256:
+#   cbf7f8326ddba8b345414c84daaa07c2df7b2f74ae5fcd33ff30eba08bdb658c
+# Final checkpoint SHA-256:
+#   b425ee5d0a2b09168114fa4fd7e755725fa63f4809b1cdb3034f9603b131863d
+# Command:
+#   env -u OMP_NUM_THREADS ./tiny-agenc train \
+#       --data data/cyberpunk.txt --out build/evidence/full-run.bin \
+#       --steps 5000 --layers 4 --heads 4 --width 128 \
+#       --block 128 --batch 32 --lr 0.001 --seed 1337
+# Started: 2026-07-25T21:14:09-06:00
+# Finished: 2026-07-25T21:18:25-06:00
+# Elapsed: 4:16.77; maximum RSS: 389624 kB
+# The final checkpoint exactly matched the bundled tiny-agenc.bin.
+tiny-agenc: 815360 parameters | 376.5 MiB buffers | vocab 80 | 4 layers x 4 heads x 128 wide
+tiny-agenc: 1089394 tokens of training data from data/cyberpunk.txt
+step     1/5000 | loss 4.4395 |  105.9 ms/step
+step    50/5000 | loss 2.4562 |   50.9 ms/step
+step   100/5000 | loss 2.1758 |   48.7 ms/step
+step   150/5000 | loss 2.1349 |   47.5 ms/step
+step   200/5000 | loss 1.9653 |   49.9 ms/step
+step   250/5000 | loss 1.8876 |   49.4 ms/step
+---- sample at step 250 ----
+KRAZR: Weett too ad tad neet shar fre-ckeort. Stam lanndourene gon blo womertt ll theee te't shad beoout icth ror on and iner.
+WIRAZR: Yeear s ount as ond the landenans thaser teach eme.
+JINX: Sthefor
+---------------------------
+step   300/5000 | loss 1.8160 |   49.9 ms/step
+step   350/5000 | loss 1.6931 |   50.1 ms/step
+step   400/5000 | loss 1.5867 |   51.1 ms/step
+step   450/5000 | loss 1.5274 |   50.1 ms/step
+step   500/5000 | loss 1.4029 |   50.5 ms/step
+---- sample at step 500 ----
+== TRANSMISSION 052 // SECTOR 11: BRESIICKS ===
+GHOST: I gut lad exys the putadns. Dock on to stilled fret.
+
+
+==== TRANSMISSION 0422 // SECTOR Mfrady it get it them sharp extraccaom on."
+RAZR: "We doc
+---------------------------
+step   550/5000 | loss 1.4040 |   50.9 ms/step
+step   600/5000 | loss 1.3094 |   49.8 ms/step
+step   650/5000 | loss 1.2215 |   49.6 ms/step
+step   700/5000 | loss 1.1842 |   48.5 ms/step
+step   750/5000 | loss 1.2121 |   43.5 ms/step
+---- sample at step 750 ----
+VYPR. Shake they're starget trap. WIRES: Vearct spreed. Let's waller finger.
+DOC: Ice us in the system. Let's got last this chroms and shit.
+WIRES: And the diment won't got some - out here we're for t
+---------------------------
+step   800/5000 | loss 1.2709 |   50.1 ms/step
+step   850/5000 | loss 1.0939 |   51.4 ms/step
+step   900/5000 | loss 1.0912 |   49.6 ms/step
+step   950/5000 | loss 1.1802 |   50.5 ms/step
+step  1000/5000 | loss 1.1439 |   50.2 ms/step
+---- sample at step 1000 ----
+GHOST: Keep your props don't be move, no caught a trouble in the Grid drofters are at their side and one cokerr.
+DOC: Got a probble. or they when is detated move that.
+GHOST: Just move?
+JINX: NYX, sta
+---------------------------
+step  1050/5000 | loss 1.1166 |   48.5 ms/step
+step  1100/5000 | loss 1.0637 |   51.5 ms/step
+step  1150/5000 | loss 1.0218 |   51.1 ms/step
+step  1200/5000 | loss 1.0917 |   50.1 ms/step
+step  1250/5000 | loss 1.0511 |   49.5 ms/step
+---- sample at step 1250 ----
+JINX: Chrome faces from where, choom! Alright a bad forevere.
+RAZR: Netrunners stay frosty any will chrome scone us.
+
+=== TRANSMISSSION 0417 // SECTOR 7: NEON DOCKS ===
+RAZR: We got eyes peeling for a
+---------------------------
+step  1300/5000 | loss 1.0485 |   50.0 ms/step
+step  1350/5000 | loss 1.0618 |   50.1 ms/step
+step  1400/5000 | loss 1.0568 |   49.6 ms/step
+step  1450/5000 | loss 1.0297 |   51.0 ms/step
+step  1500/5000 | loss 1.0491 |   50.8 ms/step
+---- sample at step 1500 ----
+MOTH: Already ono the ice is from, ready any for you to skills.
+MOTH: Stay frosty out there, choom. Grid this won't engital chrome plackout in a buiten's the ownsines.
+
+=== TRANSMISSION 0417 // SECTOR
+---------------------------
+step  1550/5000 | loss 0.9301 |   51.0 ms/step
+step  1600/5000 | loss 1.0043 |   50.0 ms/step
+step  1650/5000 | loss 1.0636 |   50.0 ms/step
+step  1700/5000 | loss 0.9460 |   51.3 ms/step
+step  1750/5000 | loss 0.9925 |   48.8 ms/step
+---- sample at step 1750 ----
+GHOST: So can you count sector. No cut, we still in the sector.
+
+=== TRANSMISSION 0512 // SECTOR 2: CORPORATE PARLANGE ===
+RAZR: The might be ice wild about through the wauliting that stall sware.
+MOT
+---------------------------
+step  1800/5000 | loss 0.9964 |   50.8 ms/step
+step  1850/5000 | loss 0.9888 |   51.7 ms/step
+step  1900/5000 | loss 0.9838 |   51.8 ms/step
+step  1950/5000 | loss 0.9602 |   50.5 ms/step
+step  2000/5000 | loss 1.0624 |   51.1 ms/step
+---- sample at step 2000 ----
+DOC: It's all this clear.
+WIRES: But ice to take our dive, they'll watch the cace hice.
+MOTH: where you ready to transmor attrap the blackout in the machine us.
+
+=== TRANSMISSION 0417 // SECTOR 7: NEO
+---------------------------
+step  2050/5000 | loss 0.9210 |   49.3 ms/step
+step  2100/5000 | loss 0.9432 |   49.6 ms/step
+step  2150/5000 | loss 0.9585 |   48.7 ms/step
+step  2200/5000 | loss 0.9184 |   49.9 ms/step
+step  2250/5000 | loss 0.9328 |   50.4 ms/step
+---- sample at step 2250 ----
+JINX: Agreed. No ready to be our lung reast of a netrun stall tatter push.
+JINX: DOC, you ready to jack in anight. It's a package cold.
+DOC: We should planted. They won't stay frosty with the rooftop 
+---------------------------
+step  2300/5000 | loss 0.9802 |   50.0 ms/step
+step  2350/5000 | loss 0.9550 |   51.2 ms/step
+step  2400/5000 | loss 0.9035 |   51.1 ms/step
+step  2450/5000 | loss 0.9068 |   49.1 ms/step
+step  2500/5000 | loss 0.8837 |   51.6 ms/step
+---- sample at step 2500 ----
+GHOST: Keep your eyes peeled that low end for the neon for, no one.
+VYPR: Too last some in the deal in three. Just out here, team.. prepash for the creds.
+JINX: We jack in the feed find netrun here. G
+---------------------------
+step  2550/5000 | loss 0.9190 |   48.6 ms/step
+step  2600/5000 | loss 0.8749 |   51.1 ms/step
+step  2650/5000 | loss 0.9615 |   50.8 ms/step
+step  2700/5000 | loss 0.9513 |   50.6 ms/step
+step  2750/5000 | loss 0.9556 |   48.7 ms/step
+---- sample at step 2750 ----
+GHOST: Eyes on the ice, stay frosty. Maybe cominT chrome.
+DOC: Stay frosty, team. We'll set up out, team.
+RAZR: Stay sharp, something upgradinted. Stay frosty.
+NYX: Stay frosty, all this goes sideways
+---------------------------
+step  2800/5000 | loss 0.8830 |   50.4 ms/step
+step  2850/5000 | loss 0.9688 |   49.5 ms/step
+step  2900/5000 | loss 0.9121 |   50.9 ms/step
+step  2950/5000 | loss 0.9289 |   50.6 ms/step
+step  3000/5000 | loss 0.9033 |   50.9 ms/step
+---- sample at step 3000 ----
+DOC: "Chrossed behind breaks the secrets."
+
+=== TRANSMISSION 0417 // SECTOR 7: NEON DOCKS ===
+RAZR: "VYPR, the neon time mistakes the corporates down. Might be a wal."
+GHOST: "Stay sharp, we'll make a
+---------------------------
+step  3050/5000 | loss 0.8691 |   49.7 ms/step
+step  3100/5000 | loss 0.9380 |   50.9 ms/step
+step  3150/5000 | loss 0.8670 |   51.4 ms/step
+step  3200/5000 | loss 0.8517 |   50.5 ms/step
+step  3250/5000 | loss 0.9042 |   51.0 ms/step
+---- sample at step 3250 ----
+MOTH: "Copy that, VYPR. I'll hacked a mess, may cred-chips."
+GHOST: "RAZR, it's a map false. We've got entrun with sides."
+VYPR: "Moth's gone better be leging our path the first proper sight to stay o
+---------------------------
+step  3300/5000 | loss 0.8213 |   48.7 ms/step
+step  3350/5000 | loss 0.9004 |   50.4 ms/step
+step  3400/5000 | loss 0.8650 |   50.1 ms/step
+step  3450/5000 | loss 0.8704 |   50.2 ms/step
+step  3500/5000 | loss 0.8577 |   51.0 ms/step
+---- sample at step 3500 ----
+JINX: The memory's gonna stay frosty.
+NYX: I've got our chrome wrong. The Grid won't wait forever.
+DOC: Whatever the flank? We need a mole been to chatter it all ear.
+WIRES: We're done through the sag
+---------------------------
+step  3550/5000 | loss 0.8217 |   49.5 ms/step
+step  3600/5000 | loss 0.8487 |   49.3 ms/step
+step  3650/5000 | loss 0.8651 |   49.8 ms/step
+step  3700/5000 | loss 0.8498 |   50.8 ms/step
+step  3750/5000 | loss 0.8127 |   49.6 ms/step
+---- sample at step 3750 ----
+DOC: We've got a blackout as we've got chance to past the nightmare data with and that blackout.
+VYPR: if they're cameras, what's sector in point some backup.
+DOC: me with corpo trouble is out here.
+J
+---------------------------
+step  3800/5000 | loss 0.8742 |   51.1 ms/step
+step  3850/5000 | loss 0.8738 |   51.4 ms/step
+step  3900/5000 | loss 0.8755 |   49.7 ms/step
+step  3950/5000 | loss 0.8899 |   51.2 ms/step
+step  4000/5000 | loss 0.8096 |   50.0 ms/step
+---- sample at step 4000 ----
+JINX: The Grid what I'm ready when you are, RAZR. We diving into the netrun waiting on your hear corpo security.
+NYX: Stay frosty, we can get our sleep quiet. We're about the off our over.
+WIRES: Stay
+---------------------------
+step  4050/5000 | loss 0.8281 |   49.5 ms/step
+step  4100/5000 | loss 0.8490 |   51.9 ms/step
+step  4150/5000 | loss 0.7281 |   51.6 ms/step
+step  4200/5000 | loss 0.8766 |   52.0 ms/step
+step  4250/5000 | loss 0.8111 |   51.8 ms/step
+---- sample at step 4250 ----
+JINX: No room for netrunners on the docks. No back.
+WIRES: We'll send up any movement any score.
+MOTH: I've got a side of this deta now.
+GHOST: Done more than exit on signal, choom. I'll be easy in th
+---------------------------
+step  4300/5000 | loss 0.9178 |   50.7 ms/step
+step  4350/5000 | loss 0.8130 |   51.9 ms/step
+step  4400/5000 | loss 0.7901 |   50.9 ms/step
+step  4450/5000 | loss 0.8798 |   51.7 ms/step
+step  4500/5000 | loss 0.7881 |   52.1 ms/step
+---- sample at step 4500 ----
+RAZR: This could get could some confirmed. Extraction to meet heads.
+GHOST: Affirmative, DOC. The Grid cold better be a corpo en second on many heavy've gonna this could key.
+
+=== TRANSMISSION 0428 //
+---------------------------
+step  4550/5000 | loss 0.7928 |   50.2 ms/step
+step  4600/5000 | loss 0.8085 |   49.3 ms/step
+step  4650/5000 | loss 0.8178 |   51.0 ms/step
+step  4700/5000 | loss 0.7761 |   51.4 ms/step
+step  4750/5000 | loss 0.8039 |   49.8 ms/step
+---- sample at step 4750 ----
+
+=== TRANSMISSION 0568 // SECTOR 9: CORPORATE LOBBY ===
+JINX: Blackout incoming? Can't fight be or nothing for good.
+JINX: What's happening for a transfer tonight?
+DOC: Will turn into trust an option.
+---------------------------
+step  4800/5000 | loss 0.8589 |   51.3 ms/step
+step  4850/5000 | loss 0.7915 |   50.1 ms/step
+step  4900/5000 | loss 0.7645 |   51.0 ms/step
+step  4950/5000 | loss 0.8503 |   51.1 ms/step
+step  5000/5000 | loss 0.7668 |   50.8 ms/step
+---- sample at step 5000 ----
+DOC: who knows what it work if we have to fallow.
+WIRES: all set to our play. or we're nothing getting with more chrome to the vault as good around.
+GHOST: let's move this like a neon glitch. tomorrow
+---------------------------
+tiny-agenc: checkpoint saved to build/evidence/full-run.bin

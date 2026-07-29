@@ -1,0 +1,25 @@
+# build products
+build/
+labs/work/
+tiny-agenc
+tags
+
+# trained checkpoints
+*.bin
+!tiny-agenc.bin
+
+# regenerable data: `make data` fetches shakespeare (checksum-pinned),
+# `make corpus` derives cyberpunk.txt from the committed raw file
+data/shakespeare.txt
+data/cyberpunk.txt
+data/cyberpunk.train.txt
+data/cyberpunk.val.txt
+
+# local AI assistant instructions and state
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.codex/
+.claude/
+.cursor/
+.aider*

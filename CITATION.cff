@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use Tiny AgenC, please cite it using this metadata."
+title: "Tiny AgenC"
+type: software
+authors:
+  - name: "Tiny AgenC contributors"
+version: 1.0.0
+date-released: 2026-07-26
+license: Apache-2.0
+repository-code: "https://github.com/tetsuo-ai/tiny-agenc"
+keywords:
+  - autoregressive-transformer
+  - c11
+  - education
+  - machine-learning
+abstract: >-
+  A character-level autoregressive transformer in C11 with handwritten
+  forward and backward passes, a staged build-along book, and a bundled
+  educational checkpoint.

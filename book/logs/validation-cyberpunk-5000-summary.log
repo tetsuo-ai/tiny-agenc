@@ -1,0 +1,61 @@
+# Selected evidence from the held-out validation run.
+# This is a compact capture, not the complete 101-report stdout stream.
+#
+# Machine: AMD Ryzen Threadripper PRO 9975WX 32-Cores
+# CPU topology: 64 logical / 32 physical (2 threads per core)
+# Compiler: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+# Build: OPENMP=1; OMP_NUM_THREADS unset; program default 32
+# Source SHA-256 (SHA-256 of sorted src file hashes):
+#   46c88bbcb83af0b52c103d7a5e70540b546dffff81a752139e25b8b1ce0cca5e
+# Executable SHA-256:
+#   b86086c42993fb6f64ffdcad6c0315555984b619855f12251b54368719967557
+# Training split SHA-256:
+#   81e4d8744add73032f5df569582272a4a28fc89a032a18d3a0c52125de6fbae7
+# Validation split SHA-256:
+#   ec24c14fca09facba0bb3283b17a8c06c58eff45df91e362af5419ac80d8cf31
+# Final checkpoint SHA-256:
+#   0753089369482f5ac9e4cb80c940c90b58f38493019ddcc4478ced61242350b8
+# Replayed sample SHA-256:
+#   8d8e1d20f37e9a54ba908277251a8a9b61f4cac6920aa86abd2c9f33c0cd144e
+#
+# Split:
+#   PCG32 shuffle seed 1337, then 90/10 whole transmissions
+#   train       982693 bytes, 1809 transmissions
+#   validation  106701 bytes, 202 transmissions
+# Add-one bigram baselines:
+#   full validation file       2.326050
+#   matched fixed windows      2.320951
+#
+# Command:
+#   env -u OMP_NUM_THREADS ./tiny-agenc train \
+#       --data data/cyberpunk.train.txt \
+#       --val-data data/cyberpunk.val.txt \
+#       --out build/evidence/validation-run.bin --steps 5000 \
+#       --layers 4 --heads 4 --width 128 --block 128 --batch 32 \
+#       --lr 0.001 --seed 1337
+# Started: 2026-07-25T21:18:40-06:00
+# Finished: 2026-07-25T21:22:39-06:00
+# Elapsed: 3:59.05; maximum RSS: 386568 kB
+
+tiny-agenc: 815360 parameters | 376.5 MiB buffers | vocab 80 | 4 layers x 4 heads x 128 wide
+tiny-agenc: 982693 tokens of training data from data/cyberpunk.train.txt
+tiny-agenc: 106701 tokens of validation data from data/cyberpunk.val.txt
+
+step     1/5000 | loss 4.4463 | val 4.0430
+step    50/5000 | loss 2.4230 | val 2.4210
+step   250/5000 | loss 1.8567 | val 1.8301
+step  1000/5000 | loss 1.1218 | val 1.1182
+step  2000/5000 | loss 0.9470 | val 0.9790
+step  3000/5000 | loss 0.8414 | val 0.9320
+step  4000/5000 | loss 0.7987 | val 0.9105
+step  5000/5000 | loss 0.7638 | val 0.9023
+
+# Replayed sample:
+#   ./tiny-agenc sample --model build/evidence/validation-run.bin \
+#       --prompt "=== TRANSMISSION 0999 // SECTOR 9: " \
+#       --length 199 --temperature 0.8 --seed 1337
+
+=== TRANSMISSION 0999 // SECTOR 9: MERCANPAY SHOWEPY ===
+NYX: "Grid's down, RAZR. MIRES in on gun. Stay frosty."
+GHOST: "chrome is tightening stay frosty. We can't let up too clay."
+RAZR: "We may have to black on the stall docks again

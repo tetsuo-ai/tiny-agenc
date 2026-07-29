@@ -1,0 +1,9 @@
+Tiny AgenC
+Copyright 2026 Tiny AgenC contributors
+
+The C source, tests, lab machinery, scripts, build files, and continuous
+integration configuration are licensed under the Apache License 2.0.
+
+The book, NIGHT GRID corpus, and bundled model checkpoint are separately
+licensed under Creative Commons Attribution 4.0 International. See the
+license notices in book/LICENSE.md, data/LICENSE.md, and MODEL_CARD.md.

@@ -1,0 +1,6 @@
+#ifndef TINY_AGENC_VERSION_H
+#define TINY_AGENC_VERSION_H
+
+#define TINY_AGENC_VERSION "1.0.0"
+
+#endif

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="700" viewBox="0 0 960 700" role="img" aria-labelledby="title desc">
+  <title id="title">Temperature changes the probability spread for logits two, one, and zero</title>
+  <desc id="desc">Three deterministic softmax curves from temperature 0.25 through 3. The highest-logit probability falls as temperature rises, while the other two rise. The ranking never changes.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #17233d; }
+    .title { font-size: 27px; font-weight: 700; }
+    .subtitle { font-size: 15px; fill: #5d6878; }
+    .tick { font-size: 14px; fill: #5d6878; }
+    .axis-label { font-size: 16px; font-weight: 650; }
+    .legend { font-size: 15px; font-weight: 650; }
+    .table-label { font-size: 14px; font-weight: 650; }
+    .table-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; }
+    .grid { stroke: #d6dce5; stroke-width: 1; }
+    .marker { stroke: #7a8699; stroke-width: 1; stroke-dasharray: 5 5; }
+    .axis { stroke: #7a8699; stroke-width: 1.5; }
+    .id-zero { fill: none; stroke: #225fc7; stroke-width: 3.2; stroke-linecap: round; }
+    .id-one { fill: none; stroke: #b84e16; stroke-width: 3.2; stroke-linecap: round; }
+    .id-two { fill: none; stroke: #2d7a55; stroke-width: 3.2; stroke-linecap: round; }
+  </style>
+  <rect width="960" height="700" fill="#ffffff"/>
+  <text x="88.00" y="40.00" class="title" text-anchor="start">A positive divisor changes the probability spread</text>
+  <text x="88.00" y="69.00" class="subtitle" text-anchor="start">Illustrative logits [2, 1, 0]; centered softmax at each temperature</text>
+  <line x1="88.00" y1="104" x2="126.00" y2="104" stroke="#225fc7" stroke-width="3.2"/>
+  <text x="135.00" y="109.00" class="legend" text-anchor="start">id 0, logit 2</text>
+  <line x1="264.00" y1="104" x2="302.00" y2="104" stroke="#b84e16" stroke-width="3.2"/>
+  <text x="311.00" y="109.00" class="legend" text-anchor="start">id 1, logit 1</text>
+  <line x1="440.00" y1="104" x2="478.00" y2="104" stroke="#2d7a55" stroke-width="3.2"/>
+  <text x="487.00" y="109.00" class="legend" text-anchor="start">id 2, logit 0</text>
+  <line x1="88.00" y1="462.00" x2="918.00" y2="462.00" class="grid"/>
+  <text x="75.00" y="467.00" class="tick" text-anchor="end">0</text>
+  <line x1="88.00" y1="383.00" x2="918.00" y2="383.00" class="grid"/>
+  <text x="75.00" y="388.00" class="tick" text-anchor="end">0.25</text>
+  <line x1="88.00" y1="304.00" x2="918.00" y2="304.00" class="grid"/>
+  <text x="75.00" y="309.00" class="tick" text-anchor="end">0.5</text>
+  <line x1="88.00" y1="225.00" x2="918.00" y2="225.00" class="grid"/>
+  <text x="75.00" y="230.00" class="tick" text-anchor="end">0.75</text>
+  <line x1="88.00" y1="146.00" x2="918.00" y2="146.00" class="grid"/>
+  <text x="75.00" y="151.00" class="tick" text-anchor="end">1</text>
+  <line x1="88.00" y1="146.00" x2="88.00" y2="462.00" class="grid"/>
+  <text x="88.00" y="487.00" class="tick" text-anchor="middle">0.25</text>
+  <line x1="163.45" y1="146.00" x2="163.45" y2="462.00" class="marker"/>
+  <text x="163.45" y="487.00" class="tick" text-anchor="middle">0.5</text>
+  <line x1="314.36" y1="146.00" x2="314.36" y2="462.00" class="marker"/>
+  <text x="314.36" y="487.00" class="tick" text-anchor="middle">1</text>
+  <line x1="616.18" y1="146.00" x2="616.18" y2="462.00" class="marker"/>
+  <text x="616.18" y="487.00" class="tick" text-anchor="middle">2</text>
+  <line x1="918.00" y1="146.00" x2="918.00" y2="462.00" class="grid"/>
+  <text x="918.00" y="487.00" class="tick" text-anchor="middle">3</text>
+  <line x1="88.00" y1="462.00" x2="918.00" y2="462.00" class="axis"/>
+  <line x1="88.00" y1="146.00" x2="88.00" y2="462.00" class="axis"/>
+  <text x="88.00" y="130.00" class="axis-label" text-anchor="start">probability</text>
+  <text x="918.00" y="514.00" class="axis-label" text-anchor="end">temperature</text>
+  <polyline points="88.00,151.79 95.55,154.32 103.09,157.26 110.64,160.54 118.18,164.09 125.73,167.86 133.27,171.78 140.82,175.80 148.36,179.89 155.91,183.99 163.45,188.09 171.00,192.15 178.55,196.16 186.09,200.09 193.64,203.95 201.18,207.71 208.73,211.37 216.27,214.93 223.82,218.38 231.36,221.72 238.91,224.96 246.45,228.08 254.00,231.11 261.55,234.02 269.09,236.84 276.64,239.56 284.18,242.18 291.73,244.71 299.27,247.16 306.82,249.51 314.36,251.78 321.91,253.98 329.45,256.09 337.00,258.14 344.55,260.11 352.09,262.02 359.64,263.86 367.18,265.64 374.73,267.36 382.27,269.02 389.82,270.63 397.36,272.18 404.91,273.69 412.45,275.15 420.00,276.56 427.55,277.93 435.09,279.26 442.64,280.54 450.18,281.79 457.73,283.00 465.27,284.17 472.82,285.31 480.36,286.42 487.91,287.50 495.45,288.54 503.00,289.56 510.55,290.55 518.09,291.51 525.64,292.44 533.18,293.35 540.73,294.24 548.27,295.10 555.82,295.94 563.36,296.76 570.91,297.56 578.45,298.34 586.00,299.10 593.55,299.84 601.09,300.56 608.64,301.26 616.18,301.95 623.73,302.62 631.27,303.28 638.82,303.92 646.36,304.55 653.91,305.16 661.45,305.76 669.00,306.35 676.55,306.92 684.09,307.48 691.64,308.03 699.18,308.56 706.73,309.09 714.27,309.60 721.82,310.10 729.36,310.60 736.91,311.08 744.45,311.55 752.00,312.02 759.55,312.47 767.09,312.92 774.64,313.36 782.18,313.78 789.73,314.21 797.27,314.62 804.82,315.02 812.36,315.42 819.91,315.81 827.45,316.19 835.00,316.57 842.55,316.94 850.09,317.30 857.64,317.66 865.18,318.01 872.73,318.35 880.27,318.69 887.82,319.02 895.36,319.35 902.91,319.67 910.45,319.98 918.00,320.29" class="id-zero"/>
+  <polyline points="88.00,456.32 95.55,453.89 103.09,451.13 110.64,448.10 118.18,444.89 125.73,441.56 133.27,438.18 140.82,434.79 148.36,431.43 155.91,428.13 163.45,424.93 171.00,421.83 178.55,418.85 186.09,415.99 193.64,413.26 201.18,410.66 208.73,408.19 216.27,405.84 223.82,403.62 231.36,401.51 238.91,399.52 246.45,397.63 254.00,395.85 261.55,394.16 269.09,392.57 276.64,391.06 284.18,389.64 291.73,388.29 299.27,387.02 306.82,385.81 314.36,384.67 321.91,383.58 329.45,382.56 337.00,381.58 344.55,380.66 352.09,379.78 359.64,378.95 367.18,378.16 374.73,377.41 382.27,376.69 389.82,376.01 397.36,375.36 404.91,374.74 412.45,374.15 420.00,373.59 427.55,373.05 435.09,372.54 442.64,372.05 450.18,371.58 457.73,371.13 465.27,370.70 472.82,370.29 480.36,369.90 487.91,369.52 495.45,369.15 503.00,368.81 510.55,368.47 518.09,368.15 525.64,367.84 533.18,367.55 540.73,367.26 548.27,366.99 555.82,366.72 563.36,366.47 570.91,366.22 578.45,365.99 586.00,365.76 593.55,365.54 601.09,365.33 608.64,365.12 616.18,364.93 623.73,364.74 631.27,364.55 638.82,364.37 646.36,364.20 653.91,364.03 661.45,363.87 669.00,363.71 676.55,363.56 684.09,363.42 691.64,363.27 699.18,363.14 706.73,363.00 714.27,362.87 721.82,362.75 729.36,362.63 736.91,362.51 744.45,362.39 752.00,362.28 759.55,362.17 767.09,362.07 774.64,361.97 782.18,361.87 789.73,361.77 797.27,361.67 804.82,361.58 812.36,361.49 819.91,361.41 827.45,361.32 835.00,361.24 842.55,361.16 850.09,361.08 857.64,361.01 865.18,360.93 872.73,360.86 880.27,360.79 887.82,360.72 895.36,360.65 902.91,360.59 910.45,360.52 918.00,360.46" class="id-one"/>
+  <polyline points="88.00,461.90 95.55,461.79 103.09,461.61 110.64,461.36 118.18,461.02 125.73,460.58 133.27,460.04 140.82,459.41 148.36,458.69 155.91,457.87 163.45,456.98 171.00,456.02 178.55,455.00 186.09,453.92 193.64,452.79 201.18,451.63 208.73,450.45 216.27,449.23 223.82,448.01 231.36,446.77 238.91,445.53 246.45,444.29 254.00,443.05 261.55,441.81 269.09,440.59 276.64,439.38 284.18,438.18 291.73,437.00 299.27,435.83 306.82,434.68 314.36,433.55 321.91,432.44 329.45,431.35 337.00,430.28 344.55,429.23 352.09,428.20 359.64,427.19 367.18,426.20 374.73,425.24 382.27,424.29 389.82,423.36 397.36,422.46 404.91,421.57 412.45,420.70 420.00,419.85 427.55,419.02 435.09,418.21 442.64,417.41 450.18,416.63 457.73,415.87 465.27,415.13 472.82,414.40 480.36,413.68 487.91,412.99 495.45,412.30 503.00,411.64 510.55,410.98 518.09,410.34 525.64,409.71 533.18,409.10 540.73,408.50 548.27,407.91 555.82,407.33 563.36,406.77 570.91,406.22 578.45,405.67 586.00,405.14 593.55,404.62 601.09,404.11 608.64,403.61 616.18,403.12 623.73,402.64 631.27,402.17 638.82,401.71 646.36,401.25 653.91,400.81 661.45,400.37 669.00,399.94 676.55,399.52 684.09,399.11 691.64,398.70 699.18,398.30 706.73,397.91 714.27,397.52 721.82,397.15 729.36,396.78 736.91,396.41 744.45,396.05 752.00,395.70 759.55,395.35 767.09,395.01 774.64,394.68 782.18,394.35 789.73,394.03 797.27,393.71 804.82,393.39 812.36,393.09 819.91,392.78 827.45,392.48 835.00,392.19 842.55,391.90 850.09,391.62 857.64,391.34 865.18,391.06 872.73,390.79 880.27,390.52 887.82,390.26 895.36,390.00 902.91,389.74 910.45,389.49 918.00,389.25" class="id-two"/>
+  <circle cx="163.45" cy="188.09" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="163.45" cy="424.93" r="4.5" fill="#ffffff" stroke="#b84e16" stroke-width="2.5"/>
+  <circle cx="163.45" cy="456.98" r="4.5" fill="#ffffff" stroke="#2d7a55" stroke-width="2.5"/>
+  <circle cx="314.36" cy="251.78" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="314.36" cy="384.67" r="4.5" fill="#ffffff" stroke="#b84e16" stroke-width="2.5"/>
+  <circle cx="314.36" cy="433.55" r="4.5" fill="#ffffff" stroke="#2d7a55" stroke-width="2.5"/>
+  <circle cx="616.18" cy="301.95" r="4.5" fill="#ffffff" stroke="#225fc7" stroke-width="2.5"/>
+  <circle cx="616.18" cy="364.93" r="4.5" fill="#ffffff" stroke="#b84e16" stroke-width="2.5"/>
+  <circle cx="616.18" cy="403.12" r="4.5" fill="#ffffff" stroke="#2d7a55" stroke-width="2.5"/>
+  <rect x="88.00" y="540.00" width="830.00" height="128.00" rx="5" fill="#f6f8fb" stroke="#d6dce5"/>
+  <line x1="88.00" y1="572.00" x2="918.00" y2="572.00" class="grid"/>
+  <line x1="88.00" y1="604.00" x2="918.00" y2="604.00" class="grid"/>
+  <line x1="88.00" y1="636.00" x2="918.00" y2="636.00" class="grid"/>
+  <line x1="262.00" y1="540.00" x2="262.00" y2="668.00" class="grid"/>
+  <line x1="480.67" y1="540.00" x2="480.67" y2="668.00" class="grid"/>
+  <line x1="699.33" y1="540.00" x2="699.33" y2="668.00" class="grid"/>
+  <text x="101.00" y="561.00" class="table-label" text-anchor="start">temperature</text>
+  <text x="101.00" y="593.00" class="table-label" text-anchor="start">p(id 0)</text>
+  <text x="101.00" y="625.00" class="table-label" text-anchor="start">p(id 1)</text>
+  <text x="101.00" y="657.00" class="table-label" text-anchor="start">p(id 2)</text>
+  <text x="371.33" y="561.00" class="table-value" text-anchor="middle">0.5</text>
+  <text x="371.33" y="593.00" class="table-value" text-anchor="middle">0.8668</text>
+  <text x="371.33" y="625.00" class="table-value" text-anchor="middle">0.1173</text>
+  <text x="371.33" y="657.00" class="table-value" text-anchor="middle">0.0159</text>
+  <text x="590.00" y="561.00" class="table-value" text-anchor="middle">1.0</text>
+  <text x="590.00" y="593.00" class="table-value" text-anchor="middle">0.6652</text>
+  <text x="590.00" y="625.00" class="table-value" text-anchor="middle">0.2447</text>
+  <text x="590.00" y="657.00" class="table-value" text-anchor="middle">0.0900</text>
+  <text x="808.67" y="561.00" class="table-value" text-anchor="middle">2.0</text>
+  <text x="808.67" y="593.00" class="table-value" text-anchor="middle">0.5065</text>
+  <text x="808.67" y="625.00" class="table-value" text-anchor="middle">0.3072</text>
+  <text x="808.67" y="657.00" class="table-value" text-anchor="middle">0.1863</text>
+</svg>

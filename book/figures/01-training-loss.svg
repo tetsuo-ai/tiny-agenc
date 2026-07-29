@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640" role="img" aria-labelledby="title desc">
+  <title id="title">Recorded training loss across five thousand steps</title>
+  <desc id="desc">A line connects all one hundred one loss reports in the committed showcase log. Loss starts at 4.4395 on step 1 and ends at 0.7668 on step 5000. The reports cover training only. Training ends by saving a checkpoint. A later sample command loads it and does not update the parameters.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #17233d; font-style: normal; }
+    .title { font-size: 28px; font-weight: 700; }
+    .subtitle { font-size: 16px; fill: #5d6878; }
+    .tick { font-size: 16px; fill: #5d6878; }
+    .axis-label { font-size: 17px; font-weight: 650; }
+    .callout-title { font-size: 17px; font-weight: 700; }
+    .callout-detail { font-size: 16px; fill: #5d6878; }
+    .source { font-size: 16px; fill: #5d6878; }
+    .grid { stroke: #d6dce5; stroke-width: 1; }
+    .axis { stroke: #17233d; stroke-width: 2; }
+    .curve { fill: none; stroke: #225fc7; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .callout-line { stroke: #147d64; stroke-width: 2; }
+  </style>
+  <rect width="960" height="640" fill="#ffffff"/>
+  <text x="44.00" y="42.00" class="title" text-anchor="start">The training penalty falls over 5,000 steps</text>
+  <text x="44.00" y="73.00" class="subtitle" text-anchor="start">Each dot is one recorded report. The line connects all 101 reports.</text>
+  <text x="44.00" y="99.00" class="subtitle" text-anchor="start">Training ends by saving the checkpoint. A later sample command loads it without updating the model.</text>
+  <rect x="88.00" y="150.00" width="832.00" height="360.00" rx="4" fill="#f8fafc" stroke="#d6dce5"/>
+  <line x1="88.00" y1="510.00" x2="920.00" y2="510.00" class="grid"/>
+  <text x="74.00" y="515.00" class="tick" text-anchor="end">0.5</text>
+  <line x1="88.00" y1="465.00" x2="920.00" y2="465.00" class="grid"/>
+  <text x="74.00" y="470.00" class="tick" text-anchor="end">1.0</text>
+  <line x1="88.00" y1="375.00" x2="920.00" y2="375.00" class="grid"/>
+  <text x="74.00" y="380.00" class="tick" text-anchor="end">2.0</text>
+  <line x1="88.00" y1="285.00" x2="920.00" y2="285.00" class="grid"/>
+  <text x="74.00" y="290.00" class="tick" text-anchor="end">3.0</text>
+  <line x1="88.00" y1="195.00" x2="920.00" y2="195.00" class="grid"/>
+  <text x="74.00" y="200.00" class="tick" text-anchor="end">4.0</text>
+  <line x1="88.00" y1="150.00" x2="920.00" y2="150.00" class="grid"/>
+  <text x="74.00" y="155.00" class="tick" text-anchor="end">4.5</text>
+  <line x1="88.00" y1="150.00" x2="88.00" y2="510.00" class="grid"/>
+  <text x="88.00" y="537.00" class="tick" text-anchor="middle">1</text>
+  <line x1="254.27" y1="150.00" x2="254.27" y2="510.00" class="grid"/>
+  <text x="254.27" y="537.00" class="tick" text-anchor="middle">1,000</text>
+  <line x1="420.70" y1="150.00" x2="420.70" y2="510.00" class="grid"/>
+  <text x="420.70" y="537.00" class="tick" text-anchor="middle">2,000</text>
+  <line x1="587.13" y1="150.00" x2="587.13" y2="510.00" class="grid"/>
+  <text x="587.13" y="537.00" class="tick" text-anchor="middle">3,000</text>
+  <line x1="753.57" y1="150.00" x2="753.57" y2="510.00" class="grid"/>
+  <text x="753.57" y="537.00" class="tick" text-anchor="middle">4,000</text>
+  <line x1="920.00" y1="150.00" x2="920.00" y2="510.00" class="grid"/>
+  <text x="920.00" y="537.00" class="tick" text-anchor="middle">5,000</text>
+  <line x1="88.00" y1="510.00" x2="920.00" y2="510.00" class="axis"/>
+  <line x1="88.00" y1="150.00" x2="88.00" y2="510.00" class="axis"/>
+  <text x="480.00" y="558.00" class="axis-label" text-anchor="middle">training step</text>
+  <text x="88.00" y="133.00" class="axis-label" text-anchor="start">recorded loss</text>
+  <polyline points="88.00,155.45 96.16,333.94 104.48,359.18 112.80,362.86 121.12,378.12 129.44,385.12 137.76,391.56 146.09,402.62 154.41,412.20 162.73,417.53 171.05,428.74 179.37,428.64 187.69,437.15 196.02,445.06 204.34,448.42 212.66,445.91 220.98,440.62 229.30,456.55 237.62,456.79 245.95,448.78 254.27,452.05 262.59,454.51 270.91,459.27 279.23,463.04 287.55,456.75 295.88,460.40 304.20,460.64 312.52,459.44 320.84,459.89 329.16,462.33 337.48,460.58 345.81,471.29 354.13,464.61 362.45,459.28 370.77,469.86 379.09,465.68 387.41,465.32 395.74,466.01 404.06,466.46 412.38,468.58 420.70,459.38 429.02,472.11 437.34,470.11 445.67,468.74 453.99,472.34 462.31,471.05 470.63,466.78 478.95,469.05 487.27,473.69 495.60,473.39 503.92,475.47 512.24,472.29 520.56,476.26 528.88,468.46 537.20,469.38 545.53,469.00 553.85,475.53 562.17,467.81 570.49,472.91 578.81,471.40 587.13,473.70 595.46,476.78 603.78,470.58 612.10,476.97 620.42,478.35 628.74,473.62 637.06,481.08 645.39,473.96 653.71,477.15 662.03,476.66 670.35,477.81 678.67,481.05 686.99,478.62 695.32,477.14 703.64,478.52 711.96,481.86 720.28,476.32 728.60,476.36 736.92,476.21 745.25,474.91 753.57,482.14 761.89,480.47 770.21,478.59 778.53,489.47 786.85,476.11 795.18,482.00 803.50,472.40 811.82,481.83 820.14,483.89 828.46,475.82 836.78,484.07 845.11,483.65 853.43,482.24 861.75,481.40 870.07,485.15 878.39,482.65 886.71,477.70 895.04,483.76 903.36,486.19 911.68,478.47 920.00,485.99" class="curve"/>
+  <circle cx="88.00" cy="155.45" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="96.16" cy="333.94" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="104.48" cy="359.18" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="112.80" cy="362.86" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="121.12" cy="378.12" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="129.44" cy="385.12" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="137.76" cy="391.56" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="146.09" cy="402.62" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="154.41" cy="412.20" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="162.73" cy="417.53" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="171.05" cy="428.74" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="179.37" cy="428.64" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="187.69" cy="437.15" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="196.02" cy="445.06" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="204.34" cy="448.42" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="212.66" cy="445.91" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="220.98" cy="440.62" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="229.30" cy="456.55" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="237.62" cy="456.79" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="245.95" cy="448.78" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="254.27" cy="452.05" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="262.59" cy="454.51" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="270.91" cy="459.27" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="279.23" cy="463.04" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="287.55" cy="456.75" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="295.88" cy="460.40" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="304.20" cy="460.64" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="312.52" cy="459.44" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="320.84" cy="459.89" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="329.16" cy="462.33" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="337.48" cy="460.58" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="345.81" cy="471.29" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="354.13" cy="464.61" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="362.45" cy="459.28" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="370.77" cy="469.86" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="379.09" cy="465.68" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="387.41" cy="465.32" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="395.74" cy="466.01" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="404.06" cy="466.46" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="412.38" cy="468.58" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="420.70" cy="459.38" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="429.02" cy="472.11" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="437.34" cy="470.11" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="445.67" cy="468.74" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="453.99" cy="472.34" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="462.31" cy="471.05" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="470.63" cy="466.78" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="478.95" cy="469.05" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="487.27" cy="473.69" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="495.60" cy="473.39" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="503.92" cy="475.47" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="512.24" cy="472.29" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="520.56" cy="476.26" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="528.88" cy="468.46" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="537.20" cy="469.38" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="545.53" cy="469.00" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="553.85" cy="475.53" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="562.17" cy="467.81" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="570.49" cy="472.91" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="578.81" cy="471.40" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="587.13" cy="473.70" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="595.46" cy="476.78" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="603.78" cy="470.58" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="612.10" cy="476.97" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="620.42" cy="478.35" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="628.74" cy="473.62" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="637.06" cy="481.08" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="645.39" cy="473.96" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="653.71" cy="477.15" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="662.03" cy="476.66" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="670.35" cy="477.81" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="678.67" cy="481.05" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="686.99" cy="478.62" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="695.32" cy="477.14" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="703.64" cy="478.52" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="711.96" cy="481.86" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="720.28" cy="476.32" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="728.60" cy="476.36" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="736.92" cy="476.21" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="745.25" cy="474.91" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="753.57" cy="482.14" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="761.89" cy="480.47" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="770.21" cy="478.59" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="778.53" cy="489.47" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="786.85" cy="476.11" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="795.18" cy="482.00" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="803.50" cy="472.40" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="811.82" cy="481.83" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="820.14" cy="483.89" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="828.46" cy="475.82" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="836.78" cy="484.07" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="845.11" cy="483.65" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="853.43" cy="482.24" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="861.75" cy="481.40" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="870.07" cy="485.15" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="878.39" cy="482.65" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="886.71" cy="477.70" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="895.04" cy="483.76" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="903.36" cy="486.19" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="911.68" cy="478.47" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <circle cx="920.00" cy="485.99" r="2.6" fill="#225fc7" stroke="#ffffff" stroke-width="0.8"/>
+  <line x1="92.00" y1="158.45" x2="116.00" y2="164.00" class="callout-line"/>
+  <rect x="116.00" y="146.00" width="190.00" height="64.00" rx="8" fill="#ffffff" stroke="#147d64"/>
+  <text x="132.00" y="173.00" class="callout-title" text-anchor="start">before adjustment 1</text>
+  <text x="132.00" y="197.00" class="callout-detail" text-anchor="start">step 1: loss 4.4395</text>
+  <line x1="866.00" y1="400.00" x2="916.00" y2="482.99" class="callout-line"/>
+  <rect x="668.00" y="352.00" width="198.00" height="64.00" rx="8" fill="#ffffff" stroke="#147d64"/>
+  <text x="684.00" y="379.00" class="callout-title" text-anchor="start">step 5,000 report</text>
+  <text x="684.00" y="403.00" class="callout-detail" text-anchor="start">final loss 0.7668</text>
+  <text x="44.00" y="612.00" class="source" text-anchor="start">Source: book/logs/train-cyberpunk-5000.log</text>
+</svg>
