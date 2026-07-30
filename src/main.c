@@ -229,6 +229,15 @@ typedef struct {
     unsigned long long seed;
 } TrainOptions;
 
+typedef struct {
+    Tokenizer *tokenizer;
+    Dataset   *training_data;
+    Dataset   *validation_data;
+    Model     *model;
+    Rng       *batch_rng;
+    Rng       *sample_rng;
+} TrainingResources;
+
 static void reject_training_path_collisions(const TrainOptions *options)
 {
     if (paths_name_same_file(options->data_path, options->out_path))
@@ -256,6 +265,138 @@ static const struct option TRAIN_FLAGS[] = {
     { "seed",   required_argument, NULL, 'x' },
     { NULL, 0, NULL, 0 },
 };
+
+static char *read_training_text(const TrainOptions *options, size_t *length)
+{
+    char *text;
+    FileSlurpStatus status =
+        file_slurp_bounded(options->data_path, dataset_max_text_bytes(),
+                           &text, length);
+
+    if (status == FILE_SLURP_TOO_LARGE)
+        die("corpus %s exceeds the platform limit of %zu bytes",
+            options->data_path, dataset_max_text_bytes());
+    if (status != FILE_SLURP_OK)
+        die("cannot read corpus %s (try `make corpus` or `make data`)",
+            options->data_path);
+    return text;
+}
+
+static Dataset *load_training_data(const TrainOptions *options,
+                                   Tokenizer **tokenizer)
+{
+    size_t length;
+    char  *text = read_training_text(options, &length);
+
+    *tokenizer = tokenizer_new(text, length);
+    (void)newline_id(*tokenizer);
+
+    Dataset *dataset = dataset_new(*tokenizer, text, length);
+
+    free(text);
+    if (dataset == NULL)
+        die("corpus %s cannot fit in a token buffer on this platform",
+            options->data_path);
+    if (dataset_token_count(dataset) < (size_t)options->cfg.block_size + 1)
+        die("corpus %s is smaller than one training window",
+            options->data_path);
+    return dataset;
+}
+
+static char *read_validation_text(const TrainOptions *options, size_t *length)
+{
+    char *text;
+    FileSlurpStatus status =
+        file_slurp_bounded(options->validation_path,
+                           dataset_max_text_bytes(), &text, length);
+
+    if (status == FILE_SLURP_TOO_LARGE)
+        die("validation corpus %s exceeds the platform limit of %zu bytes",
+            options->validation_path, dataset_max_text_bytes());
+    if (status != FILE_SLURP_OK)
+        die("cannot read validation corpus %s", options->validation_path);
+    return text;
+}
+
+static Dataset *load_validation_data(const TrainOptions *options,
+                                     const Tokenizer *tokenizer)
+{
+    if (options->validation_path == NULL)
+        return NULL;
+
+    size_t length;
+    char  *text    = read_validation_text(options, &length);
+    Dataset *dataset = dataset_new(tokenizer, text, length);
+
+    free(text);
+    if (dataset == NULL)
+        die("validation corpus %s cannot fit in a token buffer on this platform",
+            options->validation_path);
+    if (dataset_token_count(dataset) != length)
+        die("validation corpus %s contains bytes absent from training data",
+            options->validation_path);
+    if (dataset_token_count(dataset) < (size_t)options->cfg.block_size + 1)
+        die("validation corpus %s is smaller than one training window",
+            options->validation_path);
+    return dataset;
+}
+
+static void validate_training_model(TrainOptions *options,
+                                    const Tokenizer *tokenizer)
+{
+    options->cfg.vocab_size = tokenizer_vocab_size(tokenizer);
+    if (!model_config_valid(options->cfg))
+        die("impossible model configuration: --width must be divisible by --heads "
+            "and --batch x --block must stay within %d tokens",
+            MODEL_MAX_TOKENS_PER_PASS);
+
+    ModelMemory memory;
+
+    if (!model_memory_requirements(options->cfg, &memory))
+        die("model memory requirements overflow this platform");
+    if (memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES)
+        die("model needs %.1f MiB of buffers; the CLI limit is %.0f MiB",
+            (double)memory.total_bytes / (1024.0 * 1024.0),
+            (double)MODEL_MAX_CHECKPOINT_RESIDENT_BYTES / (1024.0 * 1024.0));
+}
+
+static TrainingResources prepare_training_resources(TrainOptions *options)
+{
+    TrainingResources resources = { 0 };
+
+    resources.training_data =
+        load_training_data(options, &resources.tokenizer);
+    resources.validation_data =
+        load_validation_data(options, resources.tokenizer);
+    validate_training_model(options, resources.tokenizer);
+    resources.model      = model_new(options->cfg, options->seed);
+    resources.batch_rng  = rng_new(options->seed);
+    resources.sample_rng = rng_new(options->seed + SAMPLE_SEED_OFFSET);
+    return resources;
+}
+
+static void print_training_summary(const TrainingResources *resources,
+                                   const TrainOptions *options)
+{
+    print_architecture(stdout, resources->model);
+    printf("tiny-agenc: %zu tokens of training data from %s\n",
+           dataset_token_count(resources->training_data), options->data_path);
+    if (resources->validation_data != NULL)
+        printf("tiny-agenc: %zu tokens of validation data from %s\n",
+               dataset_token_count(resources->validation_data),
+               options->validation_path);
+}
+
+static void free_training_resources(TrainingResources resources)
+{
+    rng_free(resources.sample_rng);
+    rng_free(resources.batch_rng);
+    model_free(resources.model);
+    if (resources.validation_data != NULL)
+        dataset_free(resources.validation_data);
+    dataset_free(resources.training_data);
+    tokenizer_free(resources.tokenizer);
+}
 
 typedef struct {
     int *inputs;
@@ -319,164 +460,166 @@ static void print_training_sample(Model *m, const Tokenizer *tk, Rng *rng, int s
     printf("---------------------------\n");
 }
 
-static void train_loop(Model *m, const Tokenizer *tk, const Dataset *ds,
-                       const Dataset *validation_ds,
-                       Rng *batch_rng, Rng *sample_rng,
+typedef struct {
+    int   *inputs;
+    int   *targets;
+    AdamW  optimizer;
+} TrainingStepState;
+
+typedef struct {
+    ValidationBatches validation;
+    double            clock;
+    int               timed_steps;
+} TrainingObservationState;
+
+static TrainingStepState prepare_training_step_state(
+    const TrainOptions *options)
+{
+    int span = options->cfg.batch_size * options->cfg.block_size;
+    TrainingStepState state;
+
+    state.inputs     = emalloc((size_t)span * sizeof *state.inputs);
+    state.targets    = emalloc((size_t)span * sizeof *state.targets);
+    state.optimizer  = adamw_with_rate(options->learning_rate);
+    return state;
+}
+
+static void free_training_step_state(TrainingStepState state)
+{
+    free(state.inputs);
+    free(state.targets);
+}
+
+static TrainingObservationState prepare_training_observation(
+    const TrainingResources *resources, const TrainOptions *options)
+{
+    TrainingObservationState state;
+
+    state.validation =
+        prepare_validation(resources->validation_data, options);
+    state.clock       = time_seconds();
+    state.timed_steps = 0;
+    return state;
+}
+
+static void free_training_observation(TrainingObservationState state)
+{
+    free_validation(state.validation);
+}
+
+static float run_training_step(TrainingResources *resources,
+                               TrainingStepState *state,
+                               const TrainOptions *options, int step)
+{
+    dataset_batch(resources->training_data, resources->batch_rng,
+                  state->inputs, state->targets,
+                  options->cfg.batch_size, options->cfg.block_size);
+    model_zero_gradients(resources->model);
+
+    float loss =
+        model_forward(resources->model, state->inputs, state->targets,
+                      options->cfg.batch_size, options->cfg.block_size);
+
+    model_backward(resources->model);
+    if (model_step(resources->model, state->optimizer, step) != 0)
+        die("non-finite gradient or invalid optimizer update at step %d",
+            step);
+    return loss;
+}
+
+static void restart_training_timer(TrainingObservationState *state)
+{
+    state->clock       = time_seconds();
+    state->timed_steps = 0;
+}
+
+static void print_training_report(TrainingResources *resources,
+                                  TrainingObservationState *state,
+                                  const TrainOptions *options,
+                                  int step, float loss, double milliseconds)
+{
+    if (state->validation.count > 0) {
+        float validation_loss =
+            measure_validation(resources->model, state->validation, options);
+
+        printf("step %5d/%d | loss %.4f | val %.4f | %6.1f ms/step\n",
+               step, options->steps, (double)loss,
+               (double)validation_loss, milliseconds);
+    } else {
+        printf("step %5d/%d | loss %.4f | %6.1f ms/step\n",
+               step, options->steps, (double)loss, milliseconds);
+    }
+}
+
+static void report_training_if_due(TrainingResources *resources,
+                                   TrainingObservationState *state,
+                                   const TrainOptions *options,
+                                   int step, float loss)
+{
+    if (step == 1 || step % LOSS_INTERVAL == 0) {
+        double now = time_seconds();
+        double milliseconds =
+            MILLISECONDS_PER_SECOND
+            * (now - state->clock) / state->timed_steps;
+
+        print_training_report(resources, state, options, step, loss,
+                              milliseconds);
+        restart_training_timer(state);
+    }
+}
+
+static void sample_training_if_due(TrainingResources *resources,
+                                   TrainingObservationState *state, int step)
+{
+    if (step % SAMPLE_INTERVAL == 0) {
+        print_training_sample(resources->model, resources->tokenizer,
+                              resources->sample_rng, step);
+        restart_training_timer(state);
+    }
+}
+
+static void save_training_if_due(TrainingResources *resources,
+                                 TrainingObservationState *state,
+                                 const TrainOptions *options, int step)
+{
+    if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
+        if (model_save(resources->model, resources->tokenizer,
+                       options->out_path) != 0)
+            die("cannot write checkpoint %s", options->out_path);
+        restart_training_timer(state);
+    }
+}
+
+static void train_loop(TrainingResources *resources,
                        const TrainOptions *options)
 {
-    int    span    = options->cfg.batch_size * options->cfg.block_size;
-    int   *inputs  = emalloc((size_t)span * sizeof *inputs);
-    int   *targets = emalloc((size_t)span * sizeof *targets);
-    AdamW  opt     = adamw_with_rate(options->learning_rate);
-    ValidationBatches validation = prepare_validation(validation_ds, options);
-    double clock   = time_seconds();
-    int    timed_steps = 0;
+    TrainingStepState step_state = prepare_training_step_state(options);
+    TrainingObservationState observation =
+        prepare_training_observation(resources, options);
 
     for (int step = 1; step <= options->steps; step++) {
-        dataset_batch(ds, batch_rng, inputs, targets,
-                      options->cfg.batch_size, options->cfg.block_size);
-        model_zero_gradients(m);
+        float loss =
+            run_training_step(resources, &step_state, options, step);
 
-        float loss = model_forward(m, inputs, targets,
-                                   options->cfg.batch_size, options->cfg.block_size);
-
-        model_backward(m);
-        if (model_step(m, opt, step) != 0)
-            die("non-finite gradient or invalid optimizer update at step %d",
-                step);
-        timed_steps++;
-
-        if (step == 1 || step % LOSS_INTERVAL == 0) {
-            double now = time_seconds();
-            double milliseconds =
-                MILLISECONDS_PER_SECOND * (now - clock) / timed_steps;
-
-            if (validation.count > 0) {
-                float validation_loss =
-                    measure_validation(m, validation, options);
-
-                printf("step %5d/%d | loss %.4f | val %.4f | %6.1f ms/step\n",
-                       step, options->steps, (double)loss,
-                       (double)validation_loss, milliseconds);
-            } else {
-                printf("step %5d/%d | loss %.4f | %6.1f ms/step\n",
-                       step, options->steps, (double)loss, milliseconds);
-            }
-            clock = time_seconds();   /* don't bill validation or reporting */
-            timed_steps = 0;
-        }
-        if (step % SAMPLE_INTERVAL == 0) {
-            print_training_sample(m, tk, sample_rng, step);
-            clock = time_seconds();   /* don't bill sampling to training */
-            timed_steps = 0;
-        }
-        if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
-            if (model_save(m, tk, options->out_path) != 0)
-                die("cannot write checkpoint %s", options->out_path);
-            clock = time_seconds();   /* don't bill checkpoint I/O either */
-            timed_steps = 0;
-        }
+        observation.timed_steps++;
+        report_training_if_due(resources, &observation, options, step, loss);
+        sample_training_if_due(resources, &observation, step);
+        save_training_if_due(resources, &observation, options, step);
     }
-    free_validation(validation);
-    free(inputs);
-    free(targets);
+    free_training_observation(observation);
+    free_training_step_state(step_state);
 }
 
 static int run_train(TrainOptions options)
 {
     reject_training_path_collisions(&options);
 
-    size_t length;
-    char  *text;
-    FileSlurpStatus read_status =
-        file_slurp_bounded(options.data_path, dataset_max_text_bytes(),
-                           &text, &length);
+    TrainingResources resources = prepare_training_resources(&options);
 
-    if (read_status == FILE_SLURP_TOO_LARGE)
-        die("corpus %s exceeds the platform limit of %zu bytes",
-            options.data_path, dataset_max_text_bytes());
-    if (read_status != FILE_SLURP_OK)
-        die("cannot read corpus %s (try `make corpus` or `make data`)",
-            options.data_path);
-
-    Tokenizer *tk = tokenizer_new(text, length);
-
-    (void)newline_id(tk);   /* fail before allocating a model or starting a run */
-
-    Dataset *ds = dataset_new(tk, text, length);
-
-    free(text);
-    if (ds == NULL)
-        die("corpus %s cannot fit in a token buffer on this platform",
-            options.data_path);
-    if (dataset_token_count(ds) < (size_t)options.cfg.block_size + 1)
-        die("corpus %s is smaller than one training window", options.data_path);
-
-    Dataset *validation_ds = NULL;
-
-    if (options.validation_path != NULL) {
-        size_t validation_length;
-        char  *validation_text;
-        FileSlurpStatus validation_status =
-            file_slurp_bounded(options.validation_path,
-                               dataset_max_text_bytes(),
-                               &validation_text, &validation_length);
-
-        if (validation_status == FILE_SLURP_TOO_LARGE)
-            die("validation corpus %s exceeds the platform limit of %zu bytes",
-                options.validation_path, dataset_max_text_bytes());
-        if (validation_status != FILE_SLURP_OK)
-            die("cannot read validation corpus %s", options.validation_path);
-
-        validation_ds = dataset_new(tk, validation_text, validation_length);
-        free(validation_text);
-        if (validation_ds == NULL)
-            die("validation corpus %s cannot fit in a token buffer on this platform",
-                options.validation_path);
-        if (dataset_token_count(validation_ds) != validation_length)
-            die("validation corpus %s contains bytes absent from training data",
-                options.validation_path);
-        if (dataset_token_count(validation_ds)
-            < (size_t)options.cfg.block_size + 1)
-            die("validation corpus %s is smaller than one training window",
-                options.validation_path);
-    }
-
-    options.cfg.vocab_size = tokenizer_vocab_size(tk);
-    if (!model_config_valid(options.cfg))
-        die("impossible model configuration: --width must be divisible by --heads "
-            "and --batch x --block must stay within %d tokens",
-            MODEL_MAX_TOKENS_PER_PASS);
-    ModelMemory memory;
-
-    if (!model_memory_requirements(options.cfg, &memory))
-        die("model memory requirements overflow this platform");
-    if (memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES)
-        die("model needs %.1f MiB of buffers; the CLI limit is %.0f MiB",
-            (double)memory.total_bytes / (1024.0 * 1024.0),
-            (double)MODEL_MAX_CHECKPOINT_RESIDENT_BYTES / (1024.0 * 1024.0));
-
-    Model *m          = model_new(options.cfg, options.seed);
-    Rng   *batch_rng  = rng_new(options.seed);
-    Rng   *sample_rng = rng_new(options.seed + SAMPLE_SEED_OFFSET);
-
-    print_architecture(stdout, m);
-    printf("tiny-agenc: %zu tokens of training data from %s\n",
-           dataset_token_count(ds), options.data_path);
-    if (validation_ds != NULL)
-        printf("tiny-agenc: %zu tokens of validation data from %s\n",
-               dataset_token_count(validation_ds), options.validation_path);
-
-    train_loop(m, tk, ds, validation_ds, batch_rng, sample_rng, &options);
+    print_training_summary(&resources, &options);
+    train_loop(&resources, &options);
     printf("tiny-agenc: checkpoint saved to %s\n", options.out_path);
-
-    rng_free(sample_rng);
-    rng_free(batch_rng);
-    model_free(m);
-    if (validation_ds != NULL)
-        dataset_free(validation_ds);
-    dataset_free(ds);
-    tokenizer_free(tk);
+    free_training_resources(resources);
     return EXIT_SUCCESS;
 }
 

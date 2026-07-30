@@ -126,11 +126,12 @@ hash, timestamps, and performance measurements remain attributed only
 to the historical measured source snapshot.
 
 A later construction-boundary fix made `model_new` retain its checked
-configuration and size preflight when assertions are disabled. The
-current source aggregate is:
+configuration and size preflight when assertions are disabled. Later
+source cleanup divided the training command into small named helpers
+while retaining its operation order. The current source aggregate is:
 
 ```text
-cc26ba10f4b50bd550d39a1ebec5e16dd91c628443c5a0c8434f5e0afef8ce42
+64c09fea70e7dd00e095e1fd722772d3cca217dc961dfb304c96713022a578c0
 ```
 
 `make check-ndebug` builds that source with `-DNDEBUG`, passes the
