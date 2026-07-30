@@ -39,40 +39,89 @@ static int checked_scaled_add(size_t *total, size_t count, size_t scale)
         && checked_add(*total, term, total);
 }
 
-int model_config_valid(ModelConfig cfg)
-{
-    long long tokens = (long long)cfg.batch_size * cfg.block_size;
+typedef struct {
+    size_t rows;
+    size_t channels;
+    size_t scores;
+    size_t logits;
+} ShapeCounts;
 
+typedef struct {
+    size_t values;
+    size_t gradients;
+} BlockFloatCounts;
+
+typedef struct {
+    size_t parameters;
+    size_t values;
+    size_t gradients;
+} ModelFloatCounts;
+
+static int model_dimensions_in_range(ModelConfig cfg)
+{
     return cfg.vocab_size  >= 1 && cfg.vocab_size  <= MODEL_MAX_VOCAB_SIZE
         && cfg.block_size  >= 1 && cfg.block_size  <= MODEL_MAX_BLOCK_SIZE
         && cfg.d_model     >= 1 && cfg.d_model     <= MODEL_MAX_D_MODEL
         && cfg.head_count  >= 1 && cfg.head_count  <= MODEL_MAX_HEAD_COUNT
-        && cfg.layer_count >= 1 && cfg.layer_count <= MODEL_MAX_LAYER_COUNT
-        && cfg.batch_size  >= 1 && tokens          <= MODEL_MAX_TOKENS_PER_PASS
+        && cfg.layer_count >= 1 && cfg.layer_count <= MODEL_MAX_LAYER_COUNT;
+}
+
+static int model_pass_geometry_valid(ModelConfig cfg)
+{
+    long long tokens = (long long)cfg.batch_size * cfg.block_size;
+
+    return cfg.batch_size >= 1
+        && tokens <= MODEL_MAX_TOKENS_PER_PASS
         && cfg.d_model % cfg.head_count == 0;
 }
 
-static int parameter_floats(ModelConfig cfg, size_t *result)
+int model_config_valid(ModelConfig cfg)
+{
+    return model_dimensions_in_range(cfg)
+        && model_pass_geometry_valid(cfg);
+}
+
+static int embedding_parameter_floats(ModelConfig cfg, size_t *result)
+{
+    size_t table_rows;
+
+    return checked_add((size_t)cfg.vocab_size, (size_t)cfg.block_size,
+                       &table_rows)
+        && checked_multiply(table_rows, (size_t)cfg.d_model, result);
+}
+
+static int vector_parameter_floats(ModelConfig cfg, size_t *result)
 {
     size_t width      = (size_t)cfg.d_model;
-    size_t embeddings;
-    size_t vector_floats;
-    size_t square_floats;
-    size_t total = 0;
+    size_t block_vectors;
 
-    if (!checked_add((size_t)cfg.vocab_size, (size_t)cfg.block_size,
-                     &embeddings)
-        || !checked_multiply(embeddings, width, &embeddings)
-        || !checked_multiply((size_t)cfg.layer_count, 4 * width,
-                             &vector_floats)
-        || !checked_add(vector_floats, 2 * width, &vector_floats)
-        || !checked_multiply(width, width, &square_floats)
-        || !checked_multiply(square_floats, 12, &square_floats)
-        || !checked_multiply(square_floats, (size_t)cfg.layer_count,
-                             &square_floats)
-        || !checked_add(total, embeddings, &total)
-        || !checked_add(total, vector_floats, &total)
-        || !checked_add(total, square_floats, &total))
+    return checked_multiply((size_t)cfg.layer_count, 4 * width,
+                            &block_vectors)
+        && checked_add(block_vectors, 2 * width, result);
+}
+
+static int matrix_parameter_floats(ModelConfig cfg, size_t *result)
+{
+    size_t square;
+
+    return checked_multiply((size_t)cfg.d_model, (size_t)cfg.d_model,
+                            &square)
+        && checked_multiply(square, 12, &square)
+        && checked_multiply(square, (size_t)cfg.layer_count, result);
+}
+
+static int measure_parameter_floats(ModelConfig cfg, size_t *result)
+{
+    size_t embeddings;
+    size_t vectors;
+    size_t matrices;
+    size_t total;
+
+    if (!embedding_parameter_floats(cfg, &embeddings)
+        || !vector_parameter_floats(cfg, &vectors)
+        || !matrix_parameter_floats(cfg, &matrices)
+        || !checked_add(embeddings, vectors, &total)
+        || !checked_add(total, matrices, &total))
         return 0;
     *result = total;
     return 1;
@@ -82,63 +131,117 @@ size_t model_parameter_float_count(ModelConfig cfg)
 {
     size_t result;
 
-    return parameter_floats(cfg, &result) ? result : 0;
+    return model_config_valid(cfg)
+        && measure_parameter_floats(cfg, &result) ? result : 0;
+}
+
+static int measure_shape_counts(ModelConfig cfg, ShapeCounts *result)
+{
+    ShapeCounts counts;
+
+    if (!checked_multiply((size_t)cfg.batch_size, (size_t)cfg.block_size,
+                          &counts.rows)
+        || !checked_multiply(counts.rows, (size_t)cfg.d_model,
+                             &counts.channels)
+        || !checked_multiply(counts.rows, (size_t)cfg.head_count,
+                             &counts.scores)
+        || !checked_multiply(counts.scores, (size_t)cfg.block_size,
+                             &counts.scores)
+        || !checked_multiply(counts.rows, (size_t)cfg.vocab_size,
+                             &counts.logits))
+        return 0;
+    *result = counts;
+    return 1;
+}
+
+static int measure_block_float_counts(ShapeCounts shape,
+                                      BlockFloatCounts *result)
+{
+    BlockFloatCounts counts = {0};
+
+    if (!checked_scaled_add(&counts.values, shape.channels, 18)
+        || !checked_add(counts.values, shape.scores, &counts.values)
+        || !checked_scaled_add(&counts.values, shape.rows, 4)
+        || !checked_scaled_add(&counts.gradients, shape.channels, 18)
+        || !checked_add(counts.gradients, shape.scores,
+                        &counts.gradients))
+        return 0;
+    *result = counts;
+    return 1;
+}
+
+static int measure_model_float_counts(ModelConfig cfg, ShapeCounts shape,
+                                      BlockFloatCounts block,
+                                      ModelFloatCounts *result)
+{
+    ModelFloatCounts counts = {0};
+
+    if (!measure_parameter_floats(cfg, &counts.parameters)
+        || !checked_scaled_add(&counts.values, shape.channels, 2)
+        || !checked_scaled_add(&counts.values, block.values,
+                               (size_t)cfg.layer_count)
+        || !checked_scaled_add(&counts.values, shape.rows, 2)
+        || !checked_scaled_add(&counts.values, shape.logits, 2)
+        || !checked_scaled_add(&counts.gradients, shape.channels, 2)
+        || !checked_scaled_add(&counts.gradients, block.gradients,
+                               (size_t)cfg.layer_count)
+        || !checked_add(counts.gradients, shape.logits,
+                        &counts.gradients))
+        return 0;
+    *result = counts;
+    return 1;
+}
+
+static int total_memory_bytes(ModelMemory *memory)
+{
+    size_t total;
+
+    return checked_add(memory->parameter_bytes, memory->activation_bytes,
+                       &total)
+        && checked_add(total, memory->gradient_bytes, &total)
+        && checked_add(total, memory->token_bytes, &memory->total_bytes);
+}
+
+static int build_memory_report(ShapeCounts shape, ModelFloatCounts floats,
+                               ModelMemory *result)
+{
+    ModelMemory memory;
+
+    if (!checked_multiply(floats.parameters, 4 * sizeof(float),
+                          &memory.parameter_bytes)
+        || !checked_multiply(floats.values, sizeof(float),
+                             &memory.activation_bytes)
+        || !checked_multiply(floats.gradients, sizeof(float),
+                             &memory.gradient_bytes)
+        || !checked_multiply(shape.rows, 2 * sizeof(int),
+                             &memory.token_bytes)
+        || !total_memory_bytes(&memory))
+        return 0;
+    *result = memory;
+    return 1;
+}
+
+static int measure_model_memory(ModelConfig cfg, ModelMemory *result)
+{
+    ShapeCounts shape;
+    BlockFloatCounts block;
+    ModelFloatCounts floats;
+
+    return measure_shape_counts(cfg, &shape)
+        && measure_block_float_counts(shape, &block)
+        && measure_model_float_counts(cfg, shape, block, &floats)
+        && build_memory_report(shape, floats, result);
 }
 
 int model_memory_requirements(ModelConfig cfg, ModelMemory *memory)
 {
-    if (memory == NULL || !model_config_valid(cfg))
+    ModelMemory result;
+
+    if (memory == NULL || !model_config_valid(cfg)
+        || !measure_model_memory(cfg, &result))
         return 0;
-
-    size_t rows;
-    size_t channels;
-    size_t scores;
-    size_t logits;
-    size_t block_values = 0;
-    size_t block_gradients = 0;
-    size_t value_floats = 0;
-    size_t gradient_floats = 0;
-    size_t parameter_count;
-
-    if (!checked_multiply((size_t)cfg.batch_size, (size_t)cfg.block_size,
-                          &rows)
-        || !checked_multiply(rows, (size_t)cfg.d_model, &channels)
-        || !checked_multiply(rows, (size_t)cfg.head_count, &scores)
-        || !checked_multiply(scores, (size_t)cfg.block_size, &scores)
-        || !checked_multiply(rows, (size_t)cfg.vocab_size, &logits)
-        || !parameter_floats(cfg, &parameter_count)
-        || !checked_scaled_add(&block_values, channels, 18)
-        || !checked_add(block_values, scores, &block_values)
-        || !checked_scaled_add(&block_values, rows, 4)
-        || !checked_scaled_add(&block_gradients, channels, 18)
-        || !checked_add(block_gradients, scores, &block_gradients)
-        || !checked_scaled_add(&value_floats, channels, 2)
-        || !checked_scaled_add(&value_floats, block_values,
-                               (size_t)cfg.layer_count)
-        || !checked_scaled_add(&value_floats, rows, 2)
-        || !checked_scaled_add(&value_floats, logits, 2)
-        || !checked_scaled_add(&gradient_floats, channels, 2)
-        || !checked_scaled_add(&gradient_floats, block_gradients,
-                               (size_t)cfg.layer_count)
-        || !checked_add(gradient_floats, logits, &gradient_floats)
-        || !checked_multiply(parameter_count, 4 * sizeof(float),
-                             &memory->parameter_bytes)
-        || !checked_multiply(value_floats, sizeof(float),
-                             &memory->activation_bytes)
-        || !checked_multiply(gradient_floats, sizeof(float),
-                             &memory->gradient_bytes)
-        || !checked_multiply(rows, 2 * sizeof(int), &memory->token_bytes))
-        return 0;
-
-    memory->total_bytes = 0;
-    return checked_add(memory->total_bytes, memory->parameter_bytes,
-                       &memory->total_bytes)
-        && checked_add(memory->total_bytes, memory->activation_bytes,
-                       &memory->total_bytes)
-        && checked_add(memory->total_bytes, memory->gradient_bytes,
-                       &memory->total_bytes)
-        && checked_add(memory->total_bytes, memory->token_bytes,
-                       &memory->total_bytes);
+    *memory = result;
+    return 1;
 }
 
 ModelConfig model_config(const Model *m)

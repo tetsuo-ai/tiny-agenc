@@ -226,53 +226,85 @@ The cursor counts floats, not bytes. During the measuring pass there
 is no allocation. During the placement pass the same cursor becomes
 an offset into the allocation.
 
-### The two placement helpers
+### One cursor takes every region
 
-The exact helpers in `model_memory.c` are:
+An offset alone cannot say how much storage remains. The source carries
+the base, next-free offset, and capacity together:
 
 ```c
-static Mat place(float *base, size_t *offset, int rows, int cols)
-{
-    Mat m = mat_make(base == NULL ? NULL : base + *offset, rows, cols);
+typedef struct {
+    float  *base;
+    size_t  next;
+    size_t  capacity;
+} ArenaCursor;
 
-    *offset += mat_size(m);
-    return m;
+typedef struct {
+    size_t values;
+    size_t gradients;
+} ArenaLayout;
+```
+
+`ArenaCursor` is the state of one walk. `ArenaLayout` is the pair of
+final counts produced by the two measuring walks. The exact cursor
+helpers in `model_memory.c` are:
+
+```c
+static ArenaCursor arena_cursor(float *base, size_t capacity)
+{
+    ArenaCursor cursor = { base, 0, capacity };
+
+    return cursor;
 }
 
-static float *place_floats(float *base, size_t *offset, size_t count)
+static float *arena_take(ArenaCursor *cursor, size_t count)
 {
-    float *start = base == NULL ? NULL : base + *offset;
+    if (cursor->next > cursor->capacity
+        || count > cursor->capacity - cursor->next)
+        die("model arena layout exceeded its measured capacity");
 
-    *offset += count;
+    float *start = NULL;
+
+    if (cursor->base != NULL)
+        start = cursor->base + cursor->next;
+    cursor->next += count;
     return start;
+}
+
+static Mat arena_place_mat(ArenaCursor *cursor, int rows, int cols)
+{
+    size_t count = (size_t)rows * (size_t)cols;
+
+    return mat_make(arena_take(cursor, count), rows, cols);
+}
+
+static float *arena_place_floats(ArenaCursor *cursor, size_t count)
+{
+    return arena_take(cursor, count);
 }
 ```
 
-Read `place` in source order. The conditional expression first tests
-`base`. With a real base, `base + *offset` finds the next float. With
-`NULL`, the result pointer is `NULL`.
+`arena_cursor` starts `next` at zero. `arena_take` first proves that
+the requested count fits in the remaining capacity. The subtraction
+occurs only after proving `next <= capacity`, so it cannot wrap. A
+placement bug stops at the point that asks for too much storage.
 
-That conditional is a C sharp edge, not decoration. Pointer arithmetic
-is defined only within an actual array, plus its one-past address.
-`NULL + 0` is not a harmless way to say "no storage." The unselected
-side of `?:` is not evaluated, so the measuring pass performs no null
-pointer arithmetic.
+The pointer starts as `NULL`. With a real base, the `if` advances to
+the current slot. With a null base, the addition is not executed and
+the returned start remains `NULL`. This is a C sharp edge, not
+decoration. Pointer arithmetic is defined only within an actual array,
+plus its one-past address. `NULL + 0` is not a harmless way to say
+"no storage."
 
-`mat_make` records the pointer and shape. `mat_size` needs only the
-shape, so a `NULL`-backed description can still advance the cursor.
-The dry-run description must never reach `mat_row` or any operation
-that reads its storage.
+`arena_place_mat` turns rows and columns into a float count, takes that
+region, then records its pointer and shape. `arena_place_floats`
+applies the same operation to unshaped arrays. Layernorm keeps one mean
+and one reciprocal standard deviation per row, so those regions need a
+pointer and a count rather than a two-dimensional description.
 
-`place_floats` applies the same rule to unshaped arrays. Layernorm keeps
-one mean and one reciprocal standard deviation per row, so those
-regions need a pointer and a count rather than a two-dimensional
-description.
-
-For the seven-slot example, both helpers begin with offset 0. Placing
-`2 x 2` returns the current start and advances to 4. Placing `1 x 3`
-returns the next start and advances to 7. A dry run and a real run
-therefore finish at the same count because they execute the same two
-calls.
+For the seven-slot example, a cursor begins at zero with capacity
+seven. Placing `2 x 2` returns the current start and advances to 4.
+Placing `1 x 3` returns the next start and advances to 7. Asking for
+one more float would fail the remaining-capacity check.
 
 Running one fixed placement sequence first to count and again to
 assign addresses is a **two-pass arena layout**. The name labels the
@@ -282,71 +314,101 @@ count-then-place construction above; it does not add another routine.
 
 [Chapter 1's
 `ModelConfig`](01-the-map.md#when-copying-the-description-is-useful)
-is the six-integer capacity description. The whole value sequence
-reads those capacities in this exact source:
+is the six-integer capacity description. One value block combines its
+regular tensors with four row-sized statistic arrays:
 
 ```c
-static size_t lay_out_values(Model *m, float *base)
+static void place_block_statistics(Block *block, ArenaCursor *cursor,
+                                   size_t rows)
 {
-    ModelConfig cfg    = m->cfg;
-    int         rows   = cfg.batch_size * cfg.block_size;
-    size_t      offset = 0;
+    block->means1 = arena_place_floats(cursor, rows);
+    block->rstds1 = arena_place_floats(cursor, rows);
+    block->means2 = arena_place_floats(cursor, rows);
+    block->rstds2 = arena_place_floats(cursor, rows);
+}
 
-    m->embedded = place(base, &offset, rows, cfg.d_model);
-    for (int layer = 0; layer < cfg.layer_count; layer++) {
-        Block *b = &m->blocks[layer];
-
-        place_block_tensors(&b->acts, base, &offset, cfg);
-        b->means1 = place_floats(base, &offset, (size_t)rows);
-        b->rstds1 = place_floats(base, &offset, (size_t)rows);
-        b->means2 = place_floats(base, &offset, (size_t)rows);
-        b->rstds2 = place_floats(base, &offset, (size_t)rows);
-    }
-    m->final_normed = place(base, &offset, rows, cfg.d_model);
-    m->final_means  = place_floats(base, &offset, (size_t)rows);
-    m->final_rstds  = place_floats(base, &offset, (size_t)rows);
-    m->logits       = place(base, &offset, rows, cfg.vocab_size);
-    m->probs        = place(base, &offset, rows, cfg.vocab_size);
-    return offset;
+static void place_block_values(Block *block, ArenaCursor *cursor,
+                               ModelConfig cfg, size_t rows)
+{
+    place_block_tensors(&block->acts, cursor, cfg);
+    place_block_statistics(block, cursor, rows);
 }
 ```
 
-The function resets its local cursor to zero. It places the embedded
-stream, then every block's regular tensors and four statistic arrays.
+`place_block_values` keeps those two groups adjacent for every layer.
+The whole value sequence then reads the capacities in this exact
+source:
+
+```c
+static void place_value_views(Model *m, ArenaCursor *cursor)
+{
+    ModelConfig cfg  = m->cfg;
+    int         rows = cfg.batch_size * cfg.block_size;
+
+    m->embedded = arena_place_mat(cursor, rows, cfg.d_model);
+    for (int layer = 0; layer < cfg.layer_count; layer++)
+        place_block_values(&m->blocks[layer], cursor, cfg, (size_t)rows);
+    m->final_normed = arena_place_mat(cursor, rows, cfg.d_model);
+    m->final_means = arena_place_floats(cursor, (size_t)rows);
+    m->final_rstds = arena_place_floats(cursor, (size_t)rows);
+    m->logits = arena_place_mat(cursor, rows, cfg.vocab_size);
+    m->probs = arena_place_mat(cursor, rows, cfg.vocab_size);
+}
+```
+
+The caller supplies the cursor, already reset to zero. The function
+places the embedded stream, then every block's regular tensors and four
+statistic arrays through `place_block_values`.
 The final normalized values, two final statistic arrays, logits, and
 probabilities finish the sequence.
-
-During `lay_out_values(m, NULL)`, these assignments briefly put
-`NULL` into the model's view fields. The caller uses only the returned
-count, allocates that many floats, and immediately calls the same
-function with the real base. The second pass replaces every dry-run
-description.
 
 The gradient sequence reuses the block shape order:
 
 ```c
-static size_t lay_out_gradients(Model *m, float *base)
+static void place_gradient_views(Model *m, ArenaCursor *cursor)
 {
-    ModelConfig cfg    = m->cfg;
-    int         rows   = cfg.batch_size * cfg.block_size;
-    size_t      offset = 0;
+    ModelConfig cfg  = m->cfg;
+    int         rows = cfg.batch_size * cfg.block_size;
 
-    m->d_embedded = place(base, &offset, rows, cfg.d_model);
+    m->d_embedded = arena_place_mat(cursor, rows, cfg.d_model);
     for (int layer = 0; layer < cfg.layer_count; layer++)
-        place_block_tensors(&m->blocks[layer].grads, base, &offset, cfg);
-    m->d_final_normed = place(base, &offset, rows, cfg.d_model);
-    m->d_logits       = place(base, &offset, rows, cfg.vocab_size);
-    return offset;
+        place_block_tensors(&m->blocks[layer].grads, cursor, cfg);
+    m->d_final_normed = arena_place_mat(cursor, rows, cfg.d_model);
+    m->d_logits = arena_place_mat(cursor, rows, cfg.vocab_size);
 }
 ```
 
 There are no statistic arrays and no `d_probs`, matching the lifetime
 argument above.
 
-The shared layout functions prevent their own measured cursor from
-drifting away from their placements. They do not produce a
-caller-visible byte total. A separate checked calculation will do
-that after the arena counts are known.
+The measuring pass gives each route a null cursor whose capacity is the
+largest `size_t`:
+
+```c
+static ArenaLayout measure_arena_layout(Model *m)
+{
+    ArenaCursor values = arena_cursor(NULL, SIZE_MAX);
+    ArenaCursor gradients = arena_cursor(NULL, SIZE_MAX);
+    ArenaLayout layout;
+
+    place_value_views(m, &values);
+    place_gradient_views(m, &gradients);
+    layout.values = values.next;
+    layout.gradients = gradients.next;
+    return layout;
+}
+```
+
+These two calls briefly install `NULL`-backed descriptions in the
+model. No operation reads them. `arena_take` advances only the counts
+and performs no null pointer arithmetic. The later placement passes
+replace every description with a view into allocated storage.
+
+The shared placement functions prevent a measured cursor from drifting
+away from its placements. `ArenaLayout` holds float counts, not the
+caller-visible byte total. A separate checked calculation produces
+that report before the model exists, and construction later compares
+the two routes.
 
 ## Tiny model, every slot
 
@@ -431,7 +493,7 @@ floats.
 
 It would begin at slot 88, immediately after the first block's four
 statistic arrays. The final fields would move later. The loop in
-`lay_out_values` creates exactly that order.
+`place_value_views` creates exactly that order.
 
 ## Count one block before the whole model
 
@@ -453,25 +515,24 @@ The tiny values were `R=2`, `N=4`, `S=4`, and `Q=6`. The exact block
 placement generalizes the same sequence:
 
 ```c
-static void place_block_tensors(BlockTensors *bt, float *base, size_t *offset,
+static void place_block_tensors(BlockTensors *bt, ArenaCursor *cursor,
                                 ModelConfig cfg)
 {
     int rows = cfg.batch_size * cfg.block_size;
     int wide = MODEL_MLP_WIDENING * cfg.d_model;
 
-    bt->normed1         = place(base, offset, rows, cfg.d_model);
-    bt->qkv             = place(base, offset, rows,
-                                QKV_STREAMS * cfg.d_model);
-    bt->scores          = place(base, offset, rows * cfg.head_count,
-                                cfg.block_size);
-    bt->attended        = place(base, offset, rows, cfg.d_model);
-    bt->projected       = place(base, offset, rows, cfg.d_model);
-    bt->after_attention = place(base, offset, rows, cfg.d_model);
-    bt->normed2         = place(base, offset, rows, cfg.d_model);
-    bt->up              = place(base, offset, rows, wide);
-    bt->activated       = place(base, offset, rows, wide);
-    bt->down            = place(base, offset, rows, cfg.d_model);
-    bt->after_mlp       = place(base, offset, rows, cfg.d_model);
+    bt->normed1 = arena_place_mat(cursor, rows, cfg.d_model);
+    bt->qkv = arena_place_mat(cursor, rows, QKV_STREAMS * cfg.d_model);
+    bt->scores =
+        arena_place_mat(cursor, rows * cfg.head_count, cfg.block_size);
+    bt->attended = arena_place_mat(cursor, rows, cfg.d_model);
+    bt->projected = arena_place_mat(cursor, rows, cfg.d_model);
+    bt->after_attention = arena_place_mat(cursor, rows, cfg.d_model);
+    bt->normed2 = arena_place_mat(cursor, rows, cfg.d_model);
+    bt->up = arena_place_mat(cursor, rows, wide);
+    bt->activated = arena_place_mat(cursor, rows, wide);
+    bt->down = arena_place_mat(cursor, rows, cfg.d_model);
+    bt->after_mlp = arena_place_mat(cursor, rows, cfg.d_model);
 }
 ```
 
@@ -658,10 +719,11 @@ an answer before constructing either.
 with checked arithmetic.
 
 This is intentionally an independent calculation written directly
-from the shapes. It is not the cursor returned by `lay_out_values` or
-`lay_out_gradients`, and `model_new` does not allocate the arenas from
-its byte fields. A new view must update both the placement sequence
-and this report.
+from the shapes. It is not the `ArenaLayout` returned by
+`measure_arena_layout`, and `model_new` does not allocate the arenas
+from its byte fields. A new view must update both the placement
+sequence and this report. Construction will compare the two answers
+before allocating either arena.
 
 The caller receives five byte counts in this exact public value:
 
@@ -685,41 +747,62 @@ This five-field value is the **model memory report**. Each field is a
 scalars in `int`.
 
 The report needs the learned-scalar count `P`, but even that formula
-can overflow. This exact helper checks each group:
+can overflow. One large routine could mix three independent parameter
+families and the final sum. The source gives each family one job:
 
 ```c
-static int parameter_floats(ModelConfig cfg, size_t *result)
+static int embedding_parameter_floats(ModelConfig cfg, size_t *result)
+{
+    size_t table_rows;
+
+    return checked_add((size_t)cfg.vocab_size, (size_t)cfg.block_size,
+                       &table_rows)
+        && checked_multiply(table_rows, (size_t)cfg.d_model, result);
+}
+
+static int vector_parameter_floats(ModelConfig cfg, size_t *result)
 {
     size_t width      = (size_t)cfg.d_model;
-    size_t embeddings;
-    size_t vector_floats;
-    size_t square_floats;
-    size_t total = 0;
+    size_t block_vectors;
 
-    if (!checked_add((size_t)cfg.vocab_size, (size_t)cfg.block_size,
-                     &embeddings)
-        || !checked_multiply(embeddings, width, &embeddings)
-        || !checked_multiply((size_t)cfg.layer_count, 4 * width,
-                             &vector_floats)
-        || !checked_add(vector_floats, 2 * width, &vector_floats)
-        || !checked_multiply(width, width, &square_floats)
-        || !checked_multiply(square_floats, 12, &square_floats)
-        || !checked_multiply(square_floats, (size_t)cfg.layer_count,
-                             &square_floats)
-        || !checked_add(total, embeddings, &total)
-        || !checked_add(total, vector_floats, &total)
-        || !checked_add(total, square_floats, &total))
+    return checked_multiply((size_t)cfg.layer_count, 4 * width,
+                            &block_vectors)
+        && checked_add(block_vectors, 2 * width, result);
+}
+
+static int matrix_parameter_floats(ModelConfig cfg, size_t *result)
+{
+    size_t square;
+
+    return checked_multiply((size_t)cfg.d_model, (size_t)cfg.d_model,
+                            &square)
+        && checked_multiply(square, 12, &square)
+        && checked_multiply(square, (size_t)cfg.layer_count, result);
+}
+
+static int measure_parameter_floats(ModelConfig cfg, size_t *result)
+{
+    size_t embeddings;
+    size_t vectors;
+    size_t matrices;
+    size_t total;
+
+    if (!embedding_parameter_floats(cfg, &embeddings)
+        || !vector_parameter_floats(cfg, &vectors)
+        || !matrix_parameter_floats(cfg, &matrices)
+        || !checked_add(embeddings, vectors, &total)
+        || !checked_add(total, matrices, &total))
         return 0;
     *result = total;
     return 1;
 }
 ```
 
-The first two operations compute `(V + T)C` for the token and
-position tables. The next two compute `4LC + 2C` for block layernorm
-vectors and final layernorm. The next three compute `12*L*C*C` for
-the block weight matrices. The last three additions combine those
-groups.
+`embedding_parameter_floats` computes `(V + T)C` for the two tables.
+`vector_parameter_floats` computes `4LC + 2C` for block and final
+layernorm vectors. `matrix_parameter_floats` computes `12*L*C*C` for
+the block matrices. The last helper obtains those three counts, then
+adds them.
 
 That geometry predicate already caps `C`, so the local `4 * width`
 and `2 * width` scales fit before reaching a helper. Every growing
@@ -733,103 +816,271 @@ size_t model_parameter_float_count(ModelConfig cfg)
 {
     size_t result;
 
-    return parameter_floats(cfg, &result) ? result : 0;
+    return model_config_valid(cfg)
+        && measure_parameter_floats(cfg, &result) ? result : 0;
 }
 ```
 
-On success, the conditional expression returns the count written to
-`result`. On failure, it returns zero. The Chapter 10 witness does not
-call this wrapper, but Chapter 13's checkpoint code will. Leaving it
-out can therefore pass this chapter's lab and still leave the model
-module incomplete.
+The wrapper now requires valid geometry as well as representable
+arithmetic. On success, the conditional expression returns the count
+written to `result`. On either failure, it returns zero. Chapter 13's
+checkpoint code uses this boundary.
 
-`model_memory_requirements` then combines every checked group:
+The rest of the report follows the hand calculation's three levels.
+These exact private records name them:
 
 ```c
-int model_memory_requirements(ModelConfig cfg, ModelMemory *memory)
-{
-    if (memory == NULL || !model_config_valid(cfg))
-        return 0;
-
+typedef struct {
     size_t rows;
     size_t channels;
     size_t scores;
     size_t logits;
-    size_t block_values = 0;
-    size_t block_gradients = 0;
-    size_t value_floats = 0;
-    size_t gradient_floats = 0;
-    size_t parameter_count;
+} ShapeCounts;
+
+typedef struct {
+    size_t values;
+    size_t gradients;
+} BlockFloatCounts;
+
+typedef struct {
+    size_t parameters;
+    size_t values;
+    size_t gradients;
+} ModelFloatCounts;
+```
+
+`ShapeCounts` holds `R`, `N`, `S`, and `Q`. `BlockFloatCounts` holds
+one block's value and gradient totals. `ModelFloatCounts` adds
+parameters and scales the two block totals across the model. The names
+label the levels already constructed from the tiny slot walk.
+
+The first stage builds the four shapes:
+
+```c
+static int measure_shape_counts(ModelConfig cfg, ShapeCounts *result)
+{
+    ShapeCounts counts;
 
     if (!checked_multiply((size_t)cfg.batch_size, (size_t)cfg.block_size,
-                          &rows)
-        || !checked_multiply(rows, (size_t)cfg.d_model, &channels)
-        || !checked_multiply(rows, (size_t)cfg.head_count, &scores)
-        || !checked_multiply(scores, (size_t)cfg.block_size, &scores)
-        || !checked_multiply(rows, (size_t)cfg.vocab_size, &logits)
-        || !parameter_floats(cfg, &parameter_count)
-        || !checked_scaled_add(&block_values, channels, 18)
-        || !checked_add(block_values, scores, &block_values)
-        || !checked_scaled_add(&block_values, rows, 4)
-        || !checked_scaled_add(&block_gradients, channels, 18)
-        || !checked_add(block_gradients, scores, &block_gradients)
-        || !checked_scaled_add(&value_floats, channels, 2)
-        || !checked_scaled_add(&value_floats, block_values,
-                               (size_t)cfg.layer_count)
-        || !checked_scaled_add(&value_floats, rows, 2)
-        || !checked_scaled_add(&value_floats, logits, 2)
-        || !checked_scaled_add(&gradient_floats, channels, 2)
-        || !checked_scaled_add(&gradient_floats, block_gradients,
-                               (size_t)cfg.layer_count)
-        || !checked_add(gradient_floats, logits, &gradient_floats)
-        || !checked_multiply(parameter_count, 4 * sizeof(float),
-                             &memory->parameter_bytes)
-        || !checked_multiply(value_floats, sizeof(float),
-                             &memory->activation_bytes)
-        || !checked_multiply(gradient_floats, sizeof(float),
-                             &memory->gradient_bytes)
-        || !checked_multiply(rows, 2 * sizeof(int), &memory->token_bytes))
+                          &counts.rows)
+        || !checked_multiply(counts.rows, (size_t)cfg.d_model,
+                             &counts.channels)
+        || !checked_multiply(counts.rows, (size_t)cfg.head_count,
+                             &counts.scores)
+        || !checked_multiply(counts.scores, (size_t)cfg.block_size,
+                             &counts.scores)
+        || !checked_multiply(counts.rows, (size_t)cfg.vocab_size,
+                             &counts.logits))
         return 0;
-
-    memory->total_bytes = 0;
-    return checked_add(memory->total_bytes, memory->parameter_bytes,
-                       &memory->total_bytes)
-        && checked_add(memory->total_bytes, memory->activation_bytes,
-                       &memory->total_bytes)
-        && checked_add(memory->total_bytes, memory->gradient_bytes,
-                       &memory->total_bytes)
-        && checked_add(memory->total_bytes, memory->token_bytes,
-                       &memory->total_bytes);
+    *result = counts;
+    return 1;
 }
 ```
 
-The first guard rejects a missing output pointer and invalid geometry.
-The first five checked operations construct `R`, `N`, `S`, and `Q`.
-`parameter_floats` constructs `P` from Chapter 9's formula with the
-same checked helpers.
+The products are `B*T`, then `R*C`, `R*H*T`, and `R*V`. The function
+uses a local record and publishes it only after every product fits.
 
-The next group builds one value block and one gradient block. The
-following group scales those by `L` and adds the model-wide fields.
-Only then are float and integer counts converted to bytes with
-`sizeof`.
+The second stage applies the two one-block formulas:
 
-The final four additions form the total. If any operation fails, the
-function returns zero. A caller must ignore every output field after
-failure because earlier fields may already have been written.
+```c
+static int measure_block_float_counts(ShapeCounts shape,
+                                      BlockFloatCounts *result)
+{
+    BlockFloatCounts counts = {0};
 
-The arena cursors themselves use unchecked `size_t` additions, and
-`model_new` later multiplies their final counts by `sizeof(float)`
-without another guard. The successful report makes those operations
-safe in the current source because it enumerates exactly the same
-`A` and `G` shapes. It proves each final float-to-byte product fits
-`size_t`. Every cursor increment is nonnegative, so every prefix is
-no greater than that proven final float count.
+    if (!checked_scaled_add(&counts.values, shape.channels, 18)
+        || !checked_add(counts.values, shape.scores, &counts.values)
+        || !checked_scaled_add(&counts.values, shape.rows, 4)
+        || !checked_scaled_add(&counts.gradients, shape.channels, 18)
+        || !checked_add(counts.gradients, shape.scores,
+                        &counts.gradients))
+        return 0;
+    *result = counts;
+    return 1;
+}
+```
 
-This agreement is a source-maintained invariant, not a runtime
-comparison. The program does not compare a dry-run cursor with the
-corresponding report field. If a future field changes one calculation
-without changing the other, this proof no longer holds. That is why a
-new view must update and review both routes.
+The value side becomes `18N + S + 4R`. The gradient side becomes
+`18N + S`. Starting the local record at zero makes each
+`checked_scaled_add` a direct term in those formulas.
+
+The third stage adds the fields outside the repeated blocks:
+
+```c
+static int measure_model_float_counts(ModelConfig cfg, ShapeCounts shape,
+                                      BlockFloatCounts block,
+                                      ModelFloatCounts *result)
+{
+    ModelFloatCounts counts = {0};
+
+    if (!measure_parameter_floats(cfg, &counts.parameters)
+        || !checked_scaled_add(&counts.values, shape.channels, 2)
+        || !checked_scaled_add(&counts.values, block.values,
+                               (size_t)cfg.layer_count)
+        || !checked_scaled_add(&counts.values, shape.rows, 2)
+        || !checked_scaled_add(&counts.values, shape.logits, 2)
+        || !checked_scaled_add(&counts.gradients, shape.channels, 2)
+        || !checked_scaled_add(&counts.gradients, block.gradients,
+                               (size_t)cfg.layer_count)
+        || !checked_add(counts.gradients, shape.logits,
+                        &counts.gradients))
+        return 0;
+    *result = counts;
+    return 1;
+}
+```
+
+The value route computes `2N + L*block.values + 2R + 2Q`. The
+gradient route computes `2N + L*block.gradients + Q`. The same stage
+also obtains `P`. Again, a failed operation leaves its caller's result
+untouched.
+
+Only the next stage converts complete float counts to bytes. These
+exact remaining stages from `model.c` use the already-shown checked
+helpers:
+
+```c
+static int total_memory_bytes(ModelMemory *memory)
+{
+    size_t total;
+
+    return checked_add(memory->parameter_bytes, memory->activation_bytes,
+                       &total)
+        && checked_add(total, memory->gradient_bytes, &total)
+        && checked_add(total, memory->token_bytes, &memory->total_bytes);
+}
+
+static int build_memory_report(ShapeCounts shape, ModelFloatCounts floats,
+                               ModelMemory *result)
+{
+    ModelMemory memory;
+
+    if (!checked_multiply(floats.parameters, 4 * sizeof(float),
+                          &memory.parameter_bytes)
+        || !checked_multiply(floats.values, sizeof(float),
+                             &memory.activation_bytes)
+        || !checked_multiply(floats.gradients, sizeof(float),
+                             &memory.gradient_bytes)
+        || !checked_multiply(shape.rows, 2 * sizeof(int),
+                             &memory.token_bytes)
+        || !total_memory_bytes(&memory))
+        return 0;
+    *result = memory;
+    return 1;
+}
+
+static int measure_model_memory(ModelConfig cfg, ModelMemory *result)
+{
+    ShapeCounts shape;
+    BlockFloatCounts block;
+    ModelFloatCounts floats;
+
+    return measure_shape_counts(cfg, &shape)
+        && measure_block_float_counts(shape, &block)
+        && measure_model_float_counts(cfg, shape, block, &floats)
+        && build_memory_report(shape, floats, result);
+}
+
+int model_memory_requirements(ModelConfig cfg, ModelMemory *memory)
+{
+    ModelMemory result;
+
+    if (memory == NULL || !model_config_valid(cfg)
+        || !measure_model_memory(cfg, &result))
+        return 0;
+    *memory = result;
+    return 1;
+}
+```
+
+`build_memory_report` multiplies `P` by four float buffers, converts
+`A` and `G` to float bytes, converts `R` to two integer caches, and
+asks `total_memory_bytes` to add the four families. That helper keeps
+the first two partial sums in local `total`; only the final checked
+addition writes `total_bytes`. `build_memory_report` also owns a local
+`ModelMemory`, so none of its fields reach the caller unless all five
+fields succeed.
+
+`measure_model_memory` is the short stage coordinator. The `&&`
+operators stop at the first failure. The public function adds the
+missing-output and geometry checks, computes into another local
+record, and performs one final assignment. Therefore any failure
+leaves the caller's `ModelMemory` unchanged. That behavior is part of
+the declaration in `model.h`, so callers may keep a previous report
+without receiving a mixture of old and partial fields.
+
+### Compare the independent answers at runtime
+
+An independent calculation can drift from placement. Construction now
+checks every reported storage family after parameters and block records
+exist. This exact pair performs the comparison:
+
+```c
+static int memory_total_matches_components(ModelMemory memory)
+{
+    size_t remainder = memory.total_bytes;
+
+    if (memory.parameter_bytes > remainder)
+        return 0;
+    remainder -= memory.parameter_bytes;
+    if (memory.activation_bytes > remainder)
+        return 0;
+    remainder -= memory.activation_bytes;
+    if (memory.gradient_bytes > remainder)
+        return 0;
+    remainder -= memory.gradient_bytes;
+    return remainder == memory.token_bytes;
+}
+
+static int memory_report_matches_layout(const Model *m, ModelMemory memory,
+                                        ArenaLayout layout)
+{
+    size_t parameter_unit = 4 * sizeof(float);
+    size_t token_unit = 2 * sizeof(int);
+    size_t max_tokens =
+        (size_t)m->cfg.batch_size * (size_t)m->cfg.block_size;
+
+    return memory.parameter_bytes % parameter_unit == 0
+        && memory.parameter_bytes / parameter_unit
+            == model_parameter_count(m)
+        && memory.activation_bytes % sizeof(float) == 0
+        && memory.gradient_bytes % sizeof(float) == 0
+        && memory.activation_bytes / sizeof(float) == layout.values
+        && memory.gradient_bytes / sizeof(float) == layout.gradients
+        && memory.token_bytes % token_unit == 0
+        && memory.token_bytes / token_unit == max_tokens
+        && memory_total_matches_components(memory);
+}
+```
+
+The first pair checks the four `Param` buffers against the constructed
+parameter registry. The next four checks compare the reported arena
+bytes with both measured cursor totals. The token pair checks two
+integer caches for every capacity token. The last helper subtracts
+each component from `total_bytes` only after proving it fits, then
+requires the remainder to equal `token_bytes`.
+
+`create_model_storage` runs that comparison before arena allocation:
+
+```c
+static void create_model_storage(Model *m, ModelMemory memory)
+{
+    ArenaLayout layout = measure_arena_layout(m);
+
+    require_matching_memory_report(m, memory, layout);
+    create_value_arena(m, layout.values);
+    create_gradient_arena(m, layout.gradients);
+    create_token_caches(m);
+}
+```
+
+A mismatch terminates with
+`model storage layout disagrees with its memory report`. The real
+placement cursors receive the measured count as capacity.
+`arena_take` rejects overflow during placement, and
+`require_full_arena` rejects a pass that finishes short. The
+independent routes still need to be updated together, but a drift no
+longer survives model construction silently.
 
 Configuration validity and representable arithmetic answer different
 questions. Neither enforces the one-GiB policy used by the command line
@@ -871,19 +1122,19 @@ total                                                1,928
 The Chapter 10 lab uses:
 
 ```text
-V=5, T=4, C=8, H=2, L=1, B=2
+V=5, T=4, C=8, H=2, L=2, B=2
 R=8, N=64, S=64, Q=40
-P=888, A=1,472, G=1,384
+P=1,688, A=2,720, G=2,600
 ```
 
 **Predict:** what total do the first four lines produce?
 
 ```text
-Param payloads         4*888*4       = 14,208 bytes
-value arena            1,472*4       =  5,888 bytes
-gradient arena         1,384*4       =  5,536 bytes
+Param payloads         4*1,688*4     = 27,008 bytes
+value arena            2,720*4       = 10,880 bytes
+gradient arena         2,600*4       = 10,400 bytes
 token and target ids   2*8*4         =     64 bytes
-total                                  25,696 bytes
+total                                  48,352 bytes
 ```
 
 Finally use the Chapter 0 defaults:
@@ -1034,7 +1285,70 @@ narrow storage; they do not validate a public call.
 
 ## Construction, in order
 
-`model_new` performs a one-way ownership handoff. Its exact source is:
+`model_new` performs a one-way ownership handoff. The allocation work
+is split into helpers named for the storage they create. These exact
+allocation helpers appear in `model_memory.c`:
+
+```c
+static Model *allocate_model_record(ModelConfig cfg)
+{
+    Model *m = ecalloc(1, sizeof *m);
+
+    m->cfg = cfg;
+    return m;
+}
+
+static void create_parameter_storage(Model *m, Rng *rng)
+{
+    m->blocks =
+        ecalloc((size_t)m->cfg.layer_count, sizeof *m->blocks);
+    model_create_parameters(m, rng);
+}
+
+static void create_value_arena(Model *m, size_t value_floats)
+{
+    m->values_arena =
+        emalloc(value_floats * sizeof *m->values_arena);
+
+    ArenaCursor cursor =
+        arena_cursor(m->values_arena, value_floats);
+
+    place_value_views(m, &cursor);
+    require_full_arena(cursor);
+}
+
+static void create_gradient_arena(Model *m, size_t gradient_floats)
+{
+    m->gradient_floats = gradient_floats;
+    m->gradient_arena =
+        emalloc(gradient_floats * sizeof *m->gradient_arena);
+
+    ArenaCursor cursor =
+        arena_cursor(m->gradient_arena, gradient_floats);
+
+    place_gradient_views(m, &cursor);
+    require_full_arena(cursor);
+}
+
+static void create_token_caches(Model *m)
+{
+    size_t max_tokens =
+        (size_t)m->cfg.batch_size * (size_t)m->cfg.block_size;
+
+    m->tokens = emalloc(max_tokens * sizeof *m->tokens);
+    m->targets = emalloc(max_tokens * sizeof *m->targets);
+}
+```
+
+`allocate_model_record` zeroes the model and records its configuration.
+`create_parameter_storage` zeroes the block records, then runs Chapter
+9's parameter construction. Each arena helper allocates one measured
+float count, places all its views, and requires the final cursor to
+equal its capacity. `create_gradient_arena` also saves that exact count
+for `model_zero_gradients`. The last helper allocates the two
+full-capacity id caches.
+
+With those jobs named, the exact constructor is short:
 
 ```c
 Model *model_new(ModelConfig cfg, unsigned long long seed)
@@ -1047,27 +1361,12 @@ Model *model_new(ModelConfig cfg, unsigned long long seed)
     if (!memory_ok)
         die("invalid or unrepresentable model configuration");
 
-    Model *m   = ecalloc(1, sizeof *m);
-    Rng   *rng = rng_new(seed);
-    int max_tokens = cfg.batch_size * cfg.block_size;
+    Model *m = allocate_model_record(cfg);
+    Rng *rng = rng_new(seed);
 
-    m->cfg    = cfg;
-    m->blocks = ecalloc((size_t)cfg.layer_count, sizeof *m->blocks);
-    model_create_parameters(m, rng);
+    create_parameter_storage(m, rng);
     rng_free(rng);
-
-    size_t value_floats = lay_out_values(m, NULL);
-
-    m->values_arena = emalloc(value_floats * sizeof *m->values_arena);
-    lay_out_values(m, m->values_arena);
-
-    m->gradient_floats = lay_out_gradients(m, NULL);
-    m->gradient_arena =
-        emalloc(m->gradient_floats * sizeof *m->gradient_arena);
-    lay_out_gradients(m, m->gradient_arena);
-
-    m->tokens  = emalloc((size_t)max_tokens * sizeof *m->tokens);
-    m->targets = emalloc((size_t)max_tokens * sizeof *m->targets);
+    create_model_storage(m, memory);
     return m;
 }
 ```
@@ -1077,23 +1376,23 @@ also assert the geometry and report result. When assertions are
 disabled, the explicit `if` still stops an invalid or unrepresentable
 configuration before allocation.
 
-`ecalloc` zeroes the `Model` and block structures. Parameter
-construction creates each separately owned `Param`, initializes its
-values, and leaves its gradient and moments zero. The temporary RNG is
-freed as soon as the parameter sequence is complete.
+The model record comes first, followed by the temporary RNG, block
+records, and separately owned `Param` allocations. Parameter values
+are initialized while gradients and moments start at zero. The RNG is
+freed as soon as that ordered parameter sequence is complete.
 
-The value layout then runs with `NULL`, `emalloc` obtains its
-uninitialized float block, and the layout repeats with the real base.
-The gradient layout follows the same two-pass pattern and saves its
-float count for `model_zero_gradients`. Its `emalloc` result is also
-uninitialized. Token and target caches are the final two uninitialized
-allocations.
+`create_model_storage`, shown in the runtime-comparison section, then
+measures both null-backed layouts. It compares parameter, value,
+gradient, token, and total counts with the checked report before
+allocating arenas. The value and gradient passes repeat with their
+real bases and exact measured capacities. Their `emalloc` results
+remain uninitialized. Token and target caches are the final two
+uninitialized allocations.
 
-The constructor uses `ModelMemory` as a checked preflight. Because the
-current report and layouts enumerate the same shapes, `memory_ok`
-establishes representability before the unchecked dry runs. The report
-does not place views or supply their allocation counts; the two
-dry-run layouts size the arenas.
+The constructor uses `ModelMemory` as a checked preflight, then uses
+`ArenaLayout` as the placement counts. The runtime reconciliation
+requires the independent calculations to agree before those roles
+separate.
 
 Allocation failure follows Chapter 2's fatal allocator policy.
 `model_new` neither returns `NULL` nor unwinds a partly built model.
@@ -1113,13 +1412,14 @@ block below it.
 
 **Build.** Chapter 9 deliberately left two files unfinished. In
 `model.c`, implement `checked_add`, `checked_multiply`,
-`checked_scaled_add`, `parameter_floats`,
-`model_parameter_float_count`, and `model_memory_requirements`. Keep
-the report independent of placement and preserve its failure
-contract.
+`checked_scaled_add`, the three parameter-family counts, the shape,
+block, and model count stages, `model_parameter_float_count`, and
+`model_memory_requirements`. Keep the report independent of placement,
+publish it only on success, and preserve its failure contract.
 
-In `model_memory.c`, implement `place`, `place_floats`, block placement,
-both arena layout passes, current-shape block views, the two stream
+In `model_memory.c`, implement `ArenaCursor`, `arena_take`, matrix and
+float placement, both arena layout passes, report reconciliation,
+named allocation helpers, current-shape block views, the two stream
 selectors, and the complete `model_new` order. Use the supplied
 `model_internal.h` without changing its field order. Do not zero
 `emalloc` buffers during construction or allocate one block per view.
@@ -1134,22 +1434,25 @@ make -C labs check-10
 **Expected.** [`labs/check10.c`](../labs/check10.c) reports:
 
 ```text
-check-10: all 892 arena checks passed
+check-10: all 1874 arena checks passed
 ```
 
-Four checks establish that the memory report succeeds, the arenas
-dominate the id caches, and full `2 x 4` and short `1 x 3` forward and
-backward calls produce finite positive losses. After the short call,
-the remaining 888 checks inspect every parameter-gradient scalar for
-a finite value.
+The witness constructs the two-layer geometry counted above. It checks
+that every reported byte family agrees with constructed storage. It
+walks every matrix view and statistic span in placement order, checking
+matrix shapes, exact next addresses, capacity bounds, and final arena
+boundaries. It fills the complete gradient arena with ones, calls
+`model_zero_gradients`, and checks that every reported float became
+zero. Full `2 x 4` and short `1 x 3` forward/backward calls must still
+produce finite positive losses. After the short call, all 1,688
+parameter-gradient scalars must be finite.
 
-That witness does not inspect arena offsets, exact byte fields,
-activation-gradient entries, whether a training call allocated, or
-`model_parameter_float_count`. It also clears the full-call gradients
-before checking the short call, so only the short call's 888
-parameter-gradient entries are examined. The hand calculations,
-source order, and later whole-model checks cover different parts of
-the contract.
+The broader integration witness separately fixes the five exact
+Chapter 0 showcase byte fields, exercises inclusive and rejected
+configuration boundaries, requires a representable maximum report,
+checks that a failed report leaves a sentinel record unchanged, and
+matches constructed parameter storage to the architecture formula.
+Those checks do not have a chapter-local count.
 
 **Common failures.**
 
@@ -1157,8 +1460,10 @@ the contract.
   `model.c` work was mistaken for placement work in one file.
 - A crash during the measuring pass usually performed arithmetic on
   `NULL` instead of selecting `NULL` before adding the cursor.
-- A correct arena with an incorrect public total means the independent
-  report formula drifted from the placement shapes.
+- `model storage layout disagrees with its memory report` means an
+  independent report formula drifted from constructed storage.
+- `model arena placement did not fill its measured capacity` means a
+  real placement pass ended before or after its measured boundary.
 - A full batch that works while a short batch fails usually kept the
   maximum score width instead of reshaping it to current `time`.
 - Finite results on the first cycle but stale or nonfinite results on
