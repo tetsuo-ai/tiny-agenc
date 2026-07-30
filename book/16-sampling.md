@@ -349,32 +349,67 @@ is a default, not proof of an optimal writing setting.
 Temperature changes the scratch probability sheet for this draw. It
 does not edit the input logits or any parameter.
 
-## The complete score-to-id helper
+## Four small score-to-id stages
 
-Both mechanisms now fit in the private helper. The helper also trusts
-that the supplied logit row is finite. Chapter
+Finding the largest score, constructing the probability sheet, and
+drawing from that sheet have different jobs. Keeping each job in a
+private helper gives the names a direct meaning in the coordinator.
+These helpers trust that the supplied logit row is finite. Chapter
 5's [softmax boundary](05-forward-pass.md#turn-arbitrary-scores-into-usable-shares)
-places nonfinite inputs outside its guarantee; this helper neither
+places nonfinite inputs outside its guarantee; this code neither
 validates nor repairs such a row.
 
-This is the complete exact function from
-[`model_sampling.c`](../src/model_sampling.c):
+The first helper in
+[`model_sampling.c`](../src/model_sampling.c) scans the logits in
+ascending id order:
 
 ```c
-static int sample_from_logits(Model *m, const float *logits, Rng *rng,
-                              float temperature)
+static float maximum_logit(const float *logits, int vocab)
 {
-    float *distribution = mat_row(m->probs, 0);
-    int    vocab        = m->cfg.vocab_size;
-    float  maximum      = logits[0];
+    float maximum = logits[0];
 
     for (int id = 1; id < vocab; id++)
         if (logits[id] > maximum)
             maximum = logits[id];
+    return maximum;
+}
+```
+
+`maximum` begins at id zero, and the loop visits the remaining ids.
+Every valid model has at least one vocabulary id, so the first read
+exists. Returning the value leaves the logit row unchanged.
+
+The second helper uses that value to overwrite every entry in the
+scratch sheet:
+
+```c
+static void build_distribution(float *distribution, const float *logits,
+                               int vocab, float temperature)
+{
+    float maximum = maximum_logit(logits, vocab);
+
     for (int id = 0; id < vocab; id++)
         distribution[id] = (logits[id] - maximum) / temperature;
     softmax_in_place(distribution, vocab);
+}
+```
 
+Subtracting the maximum before division keeps the winning entry at
+exactly zero even when a tiny positive temperature would overflow a
+positive scaled logit. A losing gap may become negative infinity at an
+extreme. With a finite maximum still at zero, Chapter 5's softmax gives
+that entry zero share.
+
+`softmax_in_place` repeats its own maximum subtraction. The scratch row
+already has maximum zero, so this second stability step subtracts zero
+and changes no mathematical value.
+
+The third helper owns the one random operation:
+
+```c
+static int draw_from_distribution(const float *distribution, int vocab,
+                                  Rng *rng)
+{
     float draw       = rng_uniform(rng);
     float cumulative = 0.0f;
 
@@ -387,34 +422,38 @@ static int sample_from_logits(Model *m, const float *logits, Rng *rng,
 }
 ```
 
-`mat_row(m->probs, 0)` takes Chapter 4's
-[row address](04-poor-mans-tensors.md#turn-two-coordinates-into-one-offset).
-The target-free forward left this storage stale, so the helper treats
-row zero as scratch and overwrites all `vocab` entries. It allocates no
-new probability array.
-
-`vocab` comes from the model configuration. Valid geometry permits a
-one-id vocabulary, in which case that one id receives every draw.
-`maximum` begins at id zero, and the first loop visits the remaining
-ids to find the largest raw score.
-
-The second loop writes every centered and scaled score. Subtracting the
-maximum before division keeps the winning entry at exactly zero even
-when a tiny positive temperature would overflow a positive scaled
-logit. A losing gap may become negative infinity at an extreme. With a
-finite maximum still at zero, Chapter 5's softmax gives that entry zero
-share.
-
-`softmax_in_place` repeats its own maximum subtraction. The scratch row
-already has maximum zero, so this second stability step subtracts zero
-and changes no mathematical value.
-
 `rng_uniform` advances the supplied generator once. The final loop adds
 one probability at a time and returns at the first boundary above the
 draw. If rounded additions never cross it, `vocab - 1` is the final
-valid id and owns the remainder.
+valid id and owns the remainder. The draw happens before the loop, so a
+one-id vocabulary also advances the generator exactly once.
 
-The helper reads the logit row. It never writes through the `const`
+The coordinator provides storage and connects the two transformations:
+
+```c
+static int sample_from_logits(Model *m, const float *logits, Rng *rng,
+                              float temperature)
+{
+    float *distribution = mat_row(m->probs, 0);
+    int    vocab        = m->cfg.vocab_size;
+
+    build_distribution(distribution, logits, vocab, temperature);
+    return draw_from_distribution(distribution, vocab, rng);
+}
+```
+
+`mat_row(m->probs, 0)` takes Chapter 4's
+[row address](04-poor-mans-tensors.md#turn-two-coordinates-into-one-offset).
+The target-free forward left this storage stale, so the coordinator
+treats row zero as scratch. `build_distribution` overwrites all
+`vocab` entries. The path allocates no new probability array.
+
+`vocab` comes from the model configuration. Valid geometry permits a
+one-id vocabulary, in which case that id receives every draw. The
+coordinator's two calls say what happens without mixing either loop
+into the storage choice.
+
+The stages read the logit row. They never write through the `const`
 pointer, so temperature scaling cannot change the model's stored
 scores.
 
@@ -719,7 +758,7 @@ interprets what the recorded samples can and cannot show.
 ## Know what the Chapter 16 witness proves
 
 The focused witness in [`tests/sampling.c`](../tests/sampling.c) splits
-the mechanism into three claims.
+the mechanism into four claims.
 
 First, it zeros every parameter in a five-id model. Equal logits produce
 five equal regions. From one prompt id it requests eleven new ids, and
@@ -731,12 +770,17 @@ check:
 11 generated positions * 2 checks = 22 checks
 ```
 
-Second, a controlled nonuniform model receives the same first draw
+Second, a one-id model must choose id zero while still consuming exactly
+one uniform draw. An independent RNG advances once, and the next values
+from the two generators must match. Two checks cover the id and the RNG
+position.
+
+Third, a controlled nonuniform model receives the same first draw
 twice. Temperature `0.05` concentrates the sheet enough to select id
 zero; temperature `100` flattens it enough to select another id. Three
 checks establish the cold result, hot result, and difference.
 
-Third, the prefix `[0, 0, 0, 1, 1, 0]` with `block_size = 3` produces
+Fourth, the prefix `[0, 0, 0, 1, 1, 0]` with `block_size = 3` produces
 the same next id as an explicit `[1, 1, 0]` prefix under the same RNG.
 The controlled model also makes that choice depend on all three
 retained ids, not only the newest one. Two checks cover this comparison.
@@ -744,7 +788,7 @@ retained ids, not only the newest one. Two checks cover this comparison.
 The total is:
 
 ```text
-22 equal-logit checks + 3 temperature checks + 2 suffix checks = 27
+22 equal-logit + 2 one-id + 3 temperature + 2 suffix checks = 29
 ```
 
 The dependent integration witness trains a tiny model, saves and loads

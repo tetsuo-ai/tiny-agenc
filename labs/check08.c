@@ -247,11 +247,14 @@ static void check_rejection_contracts(void)
     Mat unsafe_values = param_values(unsafe);
     Mat untouched_values = param_values(untouched);
     Mat unsafe_gradient = param_gradient(unsafe);
+    Mat untouched_gradient = param_gradient(untouched);
 
     unsafe_values.vals[3] = FLT_MAX / 4.0f;
     untouched_values.vals[3] = FLT_MAX / 4.0f;
-    for (size_t i = 0; i < mat_size(unsafe_gradient); i++)
+    for (size_t i = 0; i < mat_size(unsafe_gradient); i++) {
         unsafe_gradient.vals[i] = 0.25f;
+        untouched_gradient.vals[i] = 0.25f;
+    }
 
     AdamW overflowing = valid;
 
@@ -262,6 +265,14 @@ static void check_rejection_contracts(void)
     expect(memcmp(unsafe_values.vals, untouched_values.vals,
                   mat_size(unsafe_values) * sizeof *unsafe_values.vals) == 0,
            "unsafe arithmetic is rejected before an earlier value moves");
+
+    unsafe_values.vals[3] = untouched_values.vals[3] = 0.5f;
+    expect(param_adamw_step(unsafe, valid, 1) == 0
+           && param_adamw_step(untouched, valid, 1) == 0,
+           "a repaired parameter accepts the next valid update");
+    expect(memcmp(unsafe_values.vals, untouched_values.vals,
+                  mat_size(unsafe_values) * sizeof *unsafe_values.vals) == 0,
+           "rejection leaves optimizer history unchanged after repair");
 
     param_free(untouched);
     param_free(unsafe);

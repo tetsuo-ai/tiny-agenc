@@ -367,52 +367,94 @@ channel's level again. Epsilon is a tiny floor under the spread
 calculation, so a silent, constant row does not make the knob invalid.
 
 The following shortened excerpt joins the file-level constant to the
-complete function; the operations between them in `ops.c` are omitted:
+forward-only row record and stages. Backward-only records and the
+operations between these pieces in `ops.c` are omitted:
 
 ```c
 static const float LAYERNORM_EPSILON   = 1e-5f;       /* keeps 1/sqrt(var) finite */
+
+typedef struct {
+    Mat          out;
+    float       *means;
+    float       *rstds;
+    Mat          x;
+    const float *gain;
+    const float *bias;
+} LayernormForward;
+
+static float layernorm_row_mean(const float *input, int channels)
+{
+    float mean = 0.0f;
+
+    for (int c = 0; c < channels; c++)
+        mean += input[c];
+    mean /= (float)channels;
+    return mean;
+}
+
+static float layernorm_row_variance(const float *input, int channels,
+                                    float mean)
+{
+    float variance = 0.0f;
+
+    for (int c = 0; c < channels; c++) {
+        float centered = input[c] - mean;
+
+        variance += centered * centered;
+    }
+    variance /= (float)channels;
+    return variance;
+}
+
+static void layernorm_transform_row(float *output, const float *input,
+                                    const float *gain, const float *bias,
+                                    int channels, float mean, float rstd)
+{
+    for (int c = 0; c < channels; c++)
+        output[c] = gain[c] * ((input[c] - mean) * rstd) + bias[c];
+}
+
+static void layernorm_forward_row(const LayernormForward *forward, int row)
+{
+    const float *input  = mat_row(forward->x, row);
+    float       *output = mat_row(forward->out, row);
+    float        mean   = layernorm_row_mean(input, forward->x.cols);
+    float        variance =
+        layernorm_row_variance(input, forward->x.cols, mean);
+    float rstd = 1.0f / sqrtf(variance + LAYERNORM_EPSILON);
+
+    layernorm_transform_row(output, input, forward->gain, forward->bias,
+                            forward->x.cols, mean, rstd);
+    forward->means[row] = mean;
+    forward->rstds[row] = rstd;
+}
 
 void layernorm_forward(Mat out, float *means, float *rstds, Mat x,
                        const float *gain, const float *bias)
 {
     assert(out.rows == x.rows && out.cols == x.cols);
 
-    for (int row = 0; row < x.rows; row++) {
-        const float *input  = mat_row(x, row);
-        float       *output = mat_row(out, row);
+    LayernormForward forward =
+        { out, means, rstds, x, gain, bias };
 
-        float mean = 0.0f;
-        for (int c = 0; c < x.cols; c++)
-            mean += input[c];
-        mean /= (float)x.cols;
-
-        float variance = 0.0f;
-        for (int c = 0; c < x.cols; c++) {
-            float centered = input[c] - mean;
-
-            variance += centered * centered;
-        }
-        variance /= (float)x.cols;
-
-        float rstd = 1.0f / sqrtf(variance + LAYERNORM_EPSILON);
-
-        for (int c = 0; c < x.cols; c++)
-            output[c] = gain[c] * ((input[c] - mean) * rstd) + bias[c];
-
-        means[row] = mean;
-        rstds[row] = rstd;
-    }
+    for (int row = 0; row < x.rows; row++)
+        layernorm_forward_row(&forward, row);
 }
 ```
 
 `1e-5f` is C's compact spelling for the `float` value `0.00001`.
-After the shape assertion, the outer loop treats each row separately.
-The first channel loop adds the inputs, then division by `x.cols`
-forms the mean. The second loop centers, squares, and adds; its final
-division forms the population variance. `sqrtf` computes a `float`
-square root. The third loop normalizes and applies gain and bias.
-Finally, one mean and one reciprocal standard deviation are saved per
-row.
+`LayernormForward` keeps the six arrays needed by every row together.
+The mean stage adds channels in order and divides once. The variance
+stage centers, squares, and adds in the same channel order, then
+divides once. The transform stage normalizes each channel and applies
+gain and bias.
+
+`layernorm_forward_row` selects one input and output row. It calls the
+three stages in data order, with `sqrtf` between spread and transform,
+then saves that row's mean and reciprocal standard deviation. The
+public function checks the shapes, builds one record, and coordinates
+the row loop. A stage receives one row at a time, so statistics from
+one row cannot become another row's saved values.
 
 Saving those two numbers is part of the operation, not an optional
 optimization. The forward pass saves what the backward pass will need.
@@ -1644,14 +1686,14 @@ backward code:
 | Operation | Independent fact checked | Checks |
 |---|---|---:|
 | embedding | token addition, nonzero token row, position restart | 3 |
-| layernorm | exact mean, reciprocal spread, gain-and-bias output | 3 |
+| layernorm | two row means, two spreads, two transformed rows | 5 |
 | matmul | all four cells of the `2 x 2` worked result | 4 |
 | attention | exact weights, exact mix, causality, head isolation | 4 |
 | GELU | outputs at `-1`, `0`, and `1` | 3 |
 | residual | exact elementwise sum | 1 |
 | softmax | unit sum, equal-score tie, score ordering | 3 |
 | cross-entropy | selected targets, probabilities, changed targets | 3 |
-| **Total** | | **24** |
+| **Total** | | **26** |
 
 Small examples matter because a reader and the code can reach the same
 answer by different routes. The four matmul cells come from hand dot
@@ -1659,7 +1701,12 @@ products. The attention values come from an explicit two-position
 weighted average. The target-sensitive loss recomputes when only the
 answer key changes.
 
-`make -C labs check-05` runs all 24 learner-facing checks without
+The layernorm witness uses `[1, 2, 3]` and `[100, 102, 104]`. Their
+means are `2` and `102`; their variances are `2/3` and `8/3`.
+Reusing the first row's saved spread for the second would fail its
+transformed-output check.
+
+`make -C labs check-05` runs all 26 learner-facing checks without
 requiring any Chapter 6 backward symbol. The repository's
 `make check-forward` answer-key target runs 22 checks. It overlaps
 this witness but is narrower: it does not include the layernorm and
@@ -1683,7 +1730,7 @@ make -C labs check-05
 # answer key: make check-forward
 ```
 
-**Expected.** The lab prints `check-05: all 24 forward checks passed`.
+**Expected.** The lab prints `check-05: all 26 forward checks passed`.
 Uniform logits over 80 vocabulary entries give loss close to
 `4.3820266`. Attention output at position `t` is unchanged when only
 positions greater than `t` are perturbed.

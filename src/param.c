@@ -131,94 +131,134 @@ int param_adamw_recipe_valid(AdamW opt, int step)
         && finite_float(opt.weight_decay) && opt.weight_decay >= 0.0f;
 }
 
-static int adamw_inputs_valid(const Param *p, AdamW opt,
-                              float correction1, float correction2,
-                              float decay)
+typedef struct {
+    AdamW  opt;
+    size_t count;
+    float  correction1;
+    float  correction2;
+    float  decay;
+    double safe;
+    double inverse_correction1;
+    double inverse_correction2;
+    double inverse_epsilon;
+} PreparedAdamW;
+
+static int adamw_corrections_valid(const PreparedAdamW *step)
 {
-    size_t count = mat_size(p->values);
-    const double safe = (double)FLT_MAX / 4.0;
-    const double inverse_correction1 = 1.0 / (double)correction1;
-    const double inverse_correction2 = 1.0 / (double)correction2;
-    const double inverse_epsilon = 1.0 / (double)opt.epsilon;
+    return finite_float(step->correction1) && step->correction1 > 0.0f
+        && finite_float(step->correction2) && step->correction2 > 0.0f;
+}
 
-    for (size_t i = 0; i < count; i++) {
+static int adamw_prepare(PreparedAdamW *prepared, const Param *p,
+                         AdamW opt, int step)
+{
+    if (!param_adamw_recipe_valid(opt, step))
+        return 0;
+
+    prepared->opt = opt;
+    prepared->count = mat_size(p->values);
+    prepared->decay = is_matrix(p) ? opt.weight_decay : 0.0f;
+    prepared->correction1 = 1.0f - powf(opt.beta1, (float)step);
+    prepared->correction2 = 1.0f - powf(opt.beta2, (float)step);
+
+    if (!adamw_corrections_valid(prepared))
+        return 0;
+    prepared->safe = (double)FLT_MAX / 4.0;
+    prepared->inverse_correction1 = 1.0 / (double)prepared->correction1;
+    prepared->inverse_correction2 = 1.0 / (double)prepared->correction2;
+    prepared->inverse_epsilon = 1.0 / (double)prepared->opt.epsilon;
+    return 1;
+}
+
+static int adamw_stored_entry_valid(const Param *p, size_t i,
+                                    float gradient)
+{
+    return finite_float(gradient) && finite_float(p->values.vals[i])
+        && finite_float(p->first_moment[i])
+        && finite_float(p->second_moment[i])
+        && p->second_moment[i] >= 0.0f;
+}
+
+static int adamw_candidate_moments_valid(const PreparedAdamW *step,
+                                         float first, float second)
+{
+    return finite_float(first) && finite_float(second) && second >= 0.0f
+        && fabs((double)first) <= step->safe
+        && (double)second <= step->safe;
+}
+
+static int adamw_update_bounds_valid(const Param *p,
+                                     const PreparedAdamW *step, size_t i,
+                                     float first, float second)
+{
+    double variance_bound = (double)second * step->inverse_correction2;
+    double smoothed_bound =
+        fabs((double)first) * step->inverse_correction1;
+    double ratio_bound = smoothed_bound * step->inverse_epsilon;
+    double decay_bound =
+        (double)step->decay * fabs((double)p->values.vals[i]);
+    double direction_bound = ratio_bound + decay_bound;
+    double change_bound =
+        (double)step->opt.learning_rate * direction_bound;
+
+    return (double)step->opt.epsilon <= step->safe / 2.0
+        && variance_bound <= step->safe
+        && smoothed_bound <= step->safe
+        && ratio_bound <= step->safe
+        && decay_bound <= step->safe
+        && direction_bound <= step->safe
+        && change_bound <= step->safe
+        && fabs((double)p->values.vals[i]) + change_bound <= step->safe;
+}
+
+static int adamw_inputs_valid(const Param *p, const PreparedAdamW *step)
+{
+    for (size_t i = 0; i < step->count; i++) {
         float gradient = p->gradient[i];
-        float first = opt.beta1 * p->first_moment[i]
-                    + (1.0f - opt.beta1) * gradient;
-        float second = opt.beta2 * p->second_moment[i]
-                     + (1.0f - opt.beta2) * gradient * gradient;
+        float first = step->opt.beta1 * p->first_moment[i]
+                    + (1.0f - step->opt.beta1) * gradient;
+        float second = step->opt.beta2 * p->second_moment[i]
+                     + (1.0f - step->opt.beta2) * gradient * gradient;
 
-        if (!finite_float(gradient) || !finite_float(p->values.vals[i])
-            || !finite_float(p->first_moment[i])
-            || !finite_float(p->second_moment[i])
-            || p->second_moment[i] < 0.0f
-            || !finite_float(first) || !finite_float(second)
-            || second < 0.0f
-            || fabs((double)first) > safe
-            || (double)second > safe)
-            return 0;
-
-        /* Conservative magnitude bounds prove that every operation in
-         * the original float update below stays finite.  This avoids a
-         * second square root per element while preserving its exact
-         * normal-path arithmetic. */
-        double variance_bound = (double)second * inverse_correction2;
-        double smoothed_bound =
-            fabs((double)first) * inverse_correction1;
-        double ratio_bound = smoothed_bound * inverse_epsilon;
-        double decay_bound =
-            (double)decay * fabs((double)p->values.vals[i]);
-        double direction_bound = ratio_bound + decay_bound;
-        double change_bound =
-            (double)opt.learning_rate * direction_bound;
-
-        if ((double)opt.epsilon > safe / 2.0
-            || variance_bound > safe
-            || smoothed_bound > safe
-            || ratio_bound > safe
-            || decay_bound > safe
-            || direction_bound > safe
-            || change_bound > safe
-            || fabs((double)p->values.vals[i]) + change_bound > safe)
+        if (!adamw_stored_entry_valid(p, i, gradient)
+            || !adamw_candidate_moments_valid(step, first, second)
+            || !adamw_update_bounds_valid(p, step, i, first, second))
             return 0;
     }
     return 1;
 }
 
+static void adamw_apply_entry(Param *p, const PreparedAdamW *step, size_t i)
+{
+    float gradient = p->gradient[i];
+
+    p->first_moment[i]  = step->opt.beta1 * p->first_moment[i]
+                        + (1.0f - step->opt.beta1) * gradient;
+    p->second_moment[i] = step->opt.beta2 * p->second_moment[i]
+                        + (1.0f - step->opt.beta2) * gradient * gradient;
+
+    float smoothed = p->first_moment[i] / step->correction1;
+    float spread   = sqrtf(p->second_moment[i] / step->correction2);
+
+    p->values.vals[i] -= step->opt.learning_rate
+                       * (smoothed / (spread + step->opt.epsilon)
+                          + step->decay * p->values.vals[i]);
+}
+
+static void adamw_apply(Param *p, const PreparedAdamW *step)
+{
+    for (size_t i = 0; i < step->count; i++)
+        adamw_apply_entry(p, step, i);
+}
+
 int param_adamw_step(Param *p, AdamW opt, int step)
 {
-    if (!param_adamw_recipe_valid(opt, step))
+    PreparedAdamW prepared;
+
+    if (!adamw_prepare(&prepared, p, opt, step)
+        || !adamw_inputs_valid(p, &prepared))
         return -1;
-
-    size_t count = mat_size(p->values);
-    float  decay = is_matrix(p) ? opt.weight_decay : 0.0f;
-
-    /* The moment averages start at zero, so early on they underestimate
-     * by exactly 1 - beta^step; dividing that out unbiases them. */
-    float correction1 = 1.0f - powf(opt.beta1, (float)step);
-    float correction2 = 1.0f - powf(opt.beta2, (float)step);
-
-    if (!finite_float(correction1) || correction1 <= 0.0f
-        || !finite_float(correction2) || correction2 <= 0.0f)
-        return -1;
-    if (!adamw_inputs_valid(p, opt, correction1, correction2, decay))
-        return -1;
-
-    for (size_t i = 0; i < count; i++) {
-        float gradient = p->gradient[i];
-
-        p->first_moment[i]  = opt.beta1 * p->first_moment[i]
-                            + (1.0f - opt.beta1) * gradient;
-        p->second_moment[i] = opt.beta2 * p->second_moment[i]
-                            + (1.0f - opt.beta2) * gradient * gradient;
-
-        float smoothed = p->first_moment[i] / correction1;
-        float spread   = sqrtf(p->second_moment[i] / correction2);
-
-        p->values.vals[i] -= opt.learning_rate
-                           * (smoothed / (spread + opt.epsilon)
-                              + decay * p->values.vals[i]);
-    }
+    adamw_apply(p, &prepared);
     return 0;
 }
 

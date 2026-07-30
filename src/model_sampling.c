@@ -2,20 +2,29 @@
 
 #include "model_internal.h"
 
-static int sample_from_logits(Model *m, const float *logits, Rng *rng,
-                              float temperature)
+static float maximum_logit(const float *logits, int vocab)
 {
-    float *distribution = mat_row(m->probs, 0);
-    int    vocab        = m->cfg.vocab_size;
-    float  maximum      = logits[0];
+    float maximum = logits[0];
 
     for (int id = 1; id < vocab; id++)
         if (logits[id] > maximum)
             maximum = logits[id];
+    return maximum;
+}
+
+static void build_distribution(float *distribution, const float *logits,
+                               int vocab, float temperature)
+{
+    float maximum = maximum_logit(logits, vocab);
+
     for (int id = 0; id < vocab; id++)
         distribution[id] = (logits[id] - maximum) / temperature;
     softmax_in_place(distribution, vocab);
+}
 
+static int draw_from_distribution(const float *distribution, int vocab,
+                                  Rng *rng)
+{
     float draw       = rng_uniform(rng);
     float cumulative = 0.0f;
 
@@ -25,6 +34,16 @@ static int sample_from_logits(Model *m, const float *logits, Rng *rng,
             return id;
     }
     return vocab - 1;
+}
+
+static int sample_from_logits(Model *m, const float *logits, Rng *rng,
+                              float temperature)
+{
+    float *distribution = mat_row(m->probs, 0);
+    int    vocab        = m->cfg.vocab_size;
+
+    build_distribution(distribution, logits, vocab, temperature);
+    return draw_from_distribution(distribution, vocab, rng);
 }
 
 void model_sample(Model *m, Rng *rng, int *ids, int prompt_count,

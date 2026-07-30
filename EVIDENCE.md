@@ -129,8 +129,8 @@ A later construction-boundary fix made `model_new` retain its checked
 configuration and size preflight when assertions are disabled. Later
 source cleanup divided the training command, bounded file reader,
 tokenizer loader, and checkpoint path into small named stages while
-retaining their operation order and TAGC version 1 payload. The current
-source aggregate is:
+retaining their operation order and TAGC version 1 payload. The source
+aggregate after that cleanup was:
 
 ```text
 16f4b7f49a92edb59d9640a9480ad4ddd9da0f283d968da2b15913e8ebb01b8b
@@ -163,6 +163,69 @@ SHA-256
 The checkpoint failure harness separately pins a 121-byte deterministic
 TAGC writer fixture to the pre-refactor bytes on its recorded
 little-endian IEEE binary32 platform.
+
+The numerical-stage refactor was compared directly with merged commit
+`a4dfaae`. Both trees were built on x86-64 Ubuntu 24.04 with GCC
+13.3.0, OpenMP disabled, and the default `-O3 -ffast-math` flags. Each
+trained a one-layer, one-head, width-8 model for 50 steps against
+`labs/tiny-corpus.txt`, using block 8, batch 1, and seed 1337. The
+checkpoints compared equal and shared SHA-256
+`4adcaab12765e7d2b0802851a2bbb64c723c90263dea725c2f5cbe7d0f1627e7`.
+The merged baseline used:
+
+```sh
+make OPENMP=0
+./tiny-agenc train \
+    --data labs/tiny-corpus.txt \
+    --out /tmp/tiny-agenc-pr2-baseline-a4dfaae.bin \
+    --steps 50 --layers 1 --heads 1 --width 8 \
+    --block 8 --batch 1 --seed 1337 \
+    > /tmp/tiny-agenc-pr2-baseline-a4dfaae.log 2>&1
+./tiny-agenc sample \
+    --model /tmp/tiny-agenc-pr2-baseline-a4dfaae.bin \
+    --prompt 'RAZR:' --length 24 --temperature 0.8 --seed 1337 \
+    > /tmp/tiny-agenc-pr2-baseline-a4dfaae.sample \
+    2> /tmp/tiny-agenc-pr2-baseline-a4dfaae.sample.err
+```
+
+The refactored checkout used the same arguments with current output
+paths:
+
+```sh
+make OPENMP=0
+./tiny-agenc train \
+    --data labs/tiny-corpus.txt --out /tmp/tiny-agenc-pr2-current.bin \
+    --steps 50 --layers 1 --heads 1 --width 8 \
+    --block 8 --batch 1 --seed 1337 \
+    > /tmp/tiny-agenc-pr2-current.log 2>&1
+./tiny-agenc sample \
+    --model /tmp/tiny-agenc-pr2-current.bin \
+    --prompt 'RAZR:' --length 24 --temperature 0.8 --seed 1337 \
+    > /tmp/tiny-agenc-pr2-current.sample \
+    2> /tmp/tiny-agenc-pr2-current.sample.err
+cmp /tmp/tiny-agenc-pr2-baseline-a4dfaae.bin \
+    /tmp/tiny-agenc-pr2-current.bin
+cmp /tmp/tiny-agenc-pr2-baseline-a4dfaae.sample \
+    /tmp/tiny-agenc-pr2-current.sample
+cmp /tmp/tiny-agenc-pr2-baseline-a4dfaae.sample.err \
+    /tmp/tiny-agenc-pr2-current.sample.err
+sha256sum /tmp/tiny-agenc-pr2-baseline-a4dfaae.bin \
+    /tmp/tiny-agenc-pr2-current.bin \
+    /tmp/tiny-agenc-pr2-current.sample \
+    /tmp/tiny-agenc-pr2-current.sample.err
+```
+
+Sampling produced byte-identical standard output and diagnostics.
+Their SHA-256 values were
+`9e77d01c4baa58e2480be73defca3f0bd94f6c66892c266c009aa5ce621629d3`
+and
+`0fc63e99d7eb837b2f3010e1942f43fc6bee33cd1496ed82f9220e639dec81ba`.
+
+The current source aggregate after that refactor is:
+
+```text
+b7620842985e2b00756ab5948f65592e088243080a255b63f5fb6e6ea368ff2b
+```
 
 ## Full-corpus showcase
 

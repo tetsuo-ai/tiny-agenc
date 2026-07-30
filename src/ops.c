@@ -58,36 +58,100 @@ void embedding_backward(Mat d_token_table, Mat d_position_table, Mat d_out,
 
 /* -------- layernorm -------- */
 
+typedef struct {
+    Mat          out;
+    float       *means;
+    float       *rstds;
+    Mat          x;
+    const float *gain;
+    const float *bias;
+} LayernormForward;
+
+typedef struct {
+    Mat          d_x;
+    float       *d_gain;
+    float       *d_bias;
+    Mat          d_out;
+    Mat          x;
+    const float *gain;
+    const float *means;
+    const float *rstds;
+} LayernormBackward;
+
+typedef struct {
+    const float *input;
+    const float *d_output;
+    float       *d_input;
+    float       *d_gain;
+    float       *d_bias;
+    const float *gain;
+    int          channels;
+    float        mean;
+    float        rstd;
+} LayernormBackwardRow;
+
+typedef struct {
+    float d_norm_mean;
+    float d_norm_norm_mean;
+} LayernormGradientMeans;
+
+static float layernorm_row_mean(const float *input, int channels)
+{
+    float mean = 0.0f;
+
+    for (int c = 0; c < channels; c++)
+        mean += input[c];
+    mean /= (float)channels;
+    return mean;
+}
+
+static float layernorm_row_variance(const float *input, int channels,
+                                    float mean)
+{
+    float variance = 0.0f;
+
+    for (int c = 0; c < channels; c++) {
+        float centered = input[c] - mean;
+
+        variance += centered * centered;
+    }
+    variance /= (float)channels;
+    return variance;
+}
+
+static void layernorm_transform_row(float *output, const float *input,
+                                    const float *gain, const float *bias,
+                                    int channels, float mean, float rstd)
+{
+    for (int c = 0; c < channels; c++)
+        output[c] = gain[c] * ((input[c] - mean) * rstd) + bias[c];
+}
+
+static void layernorm_forward_row(const LayernormForward *forward, int row)
+{
+    const float *input  = mat_row(forward->x, row);
+    float       *output = mat_row(forward->out, row);
+    float        mean   = layernorm_row_mean(input, forward->x.cols);
+    float        variance =
+        layernorm_row_variance(input, forward->x.cols, mean);
+    float rstd = 1.0f / sqrtf(variance + LAYERNORM_EPSILON);
+
+    layernorm_transform_row(output, input, forward->gain, forward->bias,
+                            forward->x.cols, mean, rstd);
+    forward->means[row] = mean;
+    forward->rstds[row] = rstd;
+}
+
 void layernorm_forward(Mat out, float *means, float *rstds, Mat x,
                        const float *gain, const float *bias)
 {
     assert(out.rows == x.rows && out.cols == x.cols);
 
-    for (int row = 0; row < x.rows; row++) {
-        const float *input  = mat_row(x, row);
-        float       *output = mat_row(out, row);
+    LayernormForward forward =
+        { out, means, rstds, x, gain, bias };
 
-        float mean = 0.0f;
-        for (int c = 0; c < x.cols; c++)
-            mean += input[c];
-        mean /= (float)x.cols;
-
-        float variance = 0.0f;
-        for (int c = 0; c < x.cols; c++) {
-            float centered = input[c] - mean;
-
-            variance += centered * centered;
-        }
-        variance /= (float)x.cols;
-
-        float rstd = 1.0f / sqrtf(variance + LAYERNORM_EPSILON);
-
-        for (int c = 0; c < x.cols; c++)
-            output[c] = gain[c] * ((input[c] - mean) * rstd) + bias[c];
-
-        means[row] = mean;
-        rstds[row] = rstd;
-    }
+    for (int row = 0; row < x.rows; row++)
+        layernorm_forward_row(&forward, row);
 }
 
 /*
@@ -99,38 +163,68 @@ void layernorm_forward(Mat out, float *means, float *rstds, Mat x,
  * The two mean terms are how nudging one input moves the row's own
  * mean and variance, which every other output of the row flows through.
  */
+static LayernormGradientMeans
+layernorm_gradient_means(const LayernormBackwardRow *row)
+{
+    LayernormGradientMeans means = { 0.0f, 0.0f };
+
+    for (int c = 0; c < row->channels; c++) {
+        float norm   = (row->input[c] - row->mean) * row->rstd;
+        float d_norm = row->d_output[c] * row->gain[c];
+
+        means.d_norm_mean      += d_norm;
+        means.d_norm_norm_mean += d_norm * norm;
+    }
+    means.d_norm_mean      /= (float)row->channels;
+    means.d_norm_norm_mean /= (float)row->channels;
+    return means;
+}
+
+static void layernorm_accumulate_row_gradients(
+    const LayernormBackwardRow *row, LayernormGradientMeans means)
+{
+    for (int c = 0; c < row->channels; c++) {
+        float norm   = (row->input[c] - row->mean) * row->rstd;
+        float d_norm = row->d_output[c] * row->gain[c];
+
+        row->d_input[c] +=
+            row->rstd
+            * (d_norm - means.d_norm_mean
+               - norm * means.d_norm_norm_mean);
+        row->d_gain[c] += row->d_output[c] * norm;
+        row->d_bias[c] += row->d_output[c];
+    }
+}
+
+static void layernorm_backward_row(const LayernormBackward *backward,
+                                   int row)
+{
+    LayernormBackwardRow backward_row = {
+        mat_row(backward->x, row),
+        mat_row(backward->d_out, row),
+        mat_row(backward->d_x, row),
+        backward->d_gain,
+        backward->d_bias,
+        backward->gain,
+        backward->x.cols,
+        backward->means[row],
+        backward->rstds[row],
+    };
+    LayernormGradientMeans means =
+        layernorm_gradient_means(&backward_row);
+
+    layernorm_accumulate_row_gradients(&backward_row, means);
+}
+
 void layernorm_backward(Mat d_x, float *d_gain, float *d_bias, Mat d_out,
                         Mat x, const float *gain,
                         const float *means, const float *rstds)
 {
-    for (int row = 0; row < x.rows; row++) {
-        const float *input    = mat_row(x, row);
-        const float *d_output = mat_row(d_out, row);
-        float       *d_input  = mat_row(d_x, row);
-        float        mean     = means[row];
-        float        rstd     = rstds[row];
+    LayernormBackward backward =
+        { d_x, d_gain, d_bias, d_out, x, gain, means, rstds };
 
-        float d_norm_mean      = 0.0f;
-        float d_norm_norm_mean = 0.0f;
-        for (int c = 0; c < x.cols; c++) {
-            float norm   = (input[c] - mean) * rstd;
-            float d_norm = d_output[c] * gain[c];
-
-            d_norm_mean      += d_norm;
-            d_norm_norm_mean += d_norm * norm;
-        }
-        d_norm_mean      /= (float)x.cols;
-        d_norm_norm_mean /= (float)x.cols;
-
-        for (int c = 0; c < x.cols; c++) {
-            float norm   = (input[c] - mean) * rstd;
-            float d_norm = d_output[c] * gain[c];
-
-            d_input[c] += rstd * (d_norm - d_norm_mean - norm * d_norm_norm_mean);
-            d_gain[c]  += d_output[c] * norm;
-            d_bias[c]  += d_output[c];
-        }
-    }
+    for (int row = 0; row < x.rows; row++)
+        layernorm_backward_row(&backward, row);
 }
 
 /* -------- matmul -------- */
@@ -149,30 +243,40 @@ void matmul_forward(Mat out, Mat x, Mat weights)
     }
 }
 
+static void matmul_accumulate_input_row(Mat d_x, Mat d_out, Mat weights,
+                                        int row)
+{
+    const float *d_output = mat_row(d_out, row);
+    float       *d_input  = mat_row(d_x, row);
+
+    for (int o = 0; o < weights.rows; o++)
+        add_scaled(d_input, d_output[o], mat_row(weights, o), weights.cols);
+}
+
+static void matmul_accumulate_weight_row(Mat d_weights, Mat d_out, Mat x,
+                                         Mat weights, int output)
+{
+    float *d_neuron = mat_row(d_weights, output);
+
+    for (int row = 0; row < x.rows; row++) {
+        const float *d_output = mat_row(d_out, row);
+
+        add_scaled(d_neuron, d_output[output], mat_row(x, row), weights.cols);
+    }
+}
+
 void matmul_backward(Mat d_x, Mat d_weights, Mat d_out, Mat x, Mat weights)
 {
     /* d_x[r] += sum_o d_out[r][o] * weights[o]: rows are independent. */
     #pragma omp parallel for if(x.rows >= PARALLEL_THRESHOLD)
-    for (int row = 0; row < x.rows; row++) {
-        const float *d_output = mat_row(d_out, row);
-        float       *d_input  = mat_row(d_x, row);
-
-        for (int o = 0; o < weights.rows; o++)
-            add_scaled(d_input, d_output[o], mat_row(weights, o), weights.cols);
-    }
+    for (int row = 0; row < x.rows; row++)
+        matmul_accumulate_input_row(d_x, d_out, weights, row);
 
     /* d_weights[o] += sum_r d_out[r][o] * x[r]: output channels are
      * independent, so this loop parallelizes without collisions. */
     #pragma omp parallel for if(weights.rows >= PARALLEL_THRESHOLD)
-    for (int o = 0; o < weights.rows; o++) {
-        float *d_neuron = mat_row(d_weights, o);
-
-        for (int row = 0; row < x.rows; row++) {
-            const float *d_output = mat_row(d_out, row);
-
-            add_scaled(d_neuron, d_output[o], mat_row(x, row), weights.cols);
-        }
-    }
+    for (int o = 0; o < weights.rows; o++)
+        matmul_accumulate_weight_row(d_weights, d_out, x, weights, o);
 }
 
 /* -------- attention -------- */
@@ -244,6 +348,110 @@ static void softmax_backward_in_place(float *d_weights, const float *weights, in
         d_weights[i] = weights[i] * (d_weights[i] - coupled);
 }
 
+typedef struct {
+    Mat   d_qkv;
+    Mat   qkv;
+    const float *weights;
+    float       *d_weights;
+    const float *d_output;
+    int   seq;
+    int   offset;
+    int   t;
+    int   time;
+    int   head_size;
+    float scale;
+} AttentionBackwardPosition;
+
+typedef struct {
+    Mat   d_qkv;
+    Mat   d_scores;
+    Mat   d_out;
+    Mat   qkv;
+    Mat   scores;
+    int   seq;
+    int   head;
+    int   time;
+    int   head_count;
+    int   head_size;
+    int   offset;
+    float scale;
+} AttentionBackwardHead;
+
+static void
+attention_value_backward(const AttentionBackwardPosition *position)
+{
+    /* out = sum w[t2] v[t2], so each v earns w[t2] of the output
+     * gradient and each w earns v . d_out. */
+    for (int t2 = 0; t2 <= position->t; t2++) {
+        position->d_weights[t2] =
+            dot(position->d_output,
+                qkv_slice(position->qkv,
+                          position->seq * position->time + t2,
+                          VALUES, position->offset),
+                position->head_size);
+        add_scaled(
+            d_qkv_slice(position->d_qkv,
+                        position->seq * position->time + t2,
+                        VALUES, position->offset),
+            position->weights[t2], position->d_output,
+            position->head_size);
+    }
+}
+
+static void
+attention_score_backward(const AttentionBackwardPosition *position)
+{
+    /* raw[t2] = scale * (q . k[t2]) fans out to both sides. */
+    const float *query =
+        qkv_slice(position->qkv,
+                  position->seq * position->time + position->t,
+                  QUERIES, position->offset);
+    float *d_query =
+        d_qkv_slice(position->d_qkv,
+                    position->seq * position->time + position->t,
+                    QUERIES, position->offset);
+
+    for (int t2 = 0; t2 <= position->t; t2++) {
+        float d_raw = position->scale * position->d_weights[t2];
+
+        add_scaled(d_query, d_raw,
+                   qkv_slice(position->qkv,
+                             position->seq * position->time + t2,
+                             KEYS, position->offset),
+                   position->head_size);
+        add_scaled(
+            d_qkv_slice(position->d_qkv,
+                        position->seq * position->time + t2,
+                        KEYS, position->offset),
+            d_raw, query, position->head_size);
+    }
+}
+
+static void
+attention_position_backward(const AttentionBackwardHead *head, int t)
+{
+    int score_row =
+        (head->seq * head->head_count + head->head) * head->time + t;
+    AttentionBackwardPosition position = {
+        head->d_qkv,
+        head->qkv,
+        mat_row(head->scores, score_row),
+        mat_row(head->d_scores, score_row),
+        mat_row(head->d_out, head->seq * head->time + t) + head->offset,
+        head->seq,
+        head->offset,
+        t,
+        head->time,
+        head->head_size,
+        head->scale,
+    };
+
+    attention_value_backward(&position);
+    softmax_backward_in_place(position.d_weights, position.weights,
+                              t + 1);
+    attention_score_backward(&position);
+}
+
 /* The same (sequence, head) pair, unwound in reverse. */
 static void attention_head_backward(Mat d_qkv, Mat d_scores, Mat d_out,
                                     Mat qkv, Mat scores, int seq, int head,
@@ -252,35 +460,13 @@ static void attention_head_backward(Mat d_qkv, Mat d_scores, Mat d_out,
     int   head_size = d_out.cols / head_count;
     int   offset    = head * head_size;
     float scale     = 1.0f / sqrtf((float)head_size);
+    AttentionBackwardHead backward = {
+        d_qkv, d_scores, d_out, qkv, scores,
+        seq, head, time, head_count, head_size, offset, scale,
+    };
 
-    for (int t = 0; t < time; t++) {
-        int          score_row = (seq * head_count + head) * time + t;
-        const float *weights   = mat_row(scores, score_row);
-        float       *d_weights = mat_row(d_scores, score_row);
-        const float *d_output  = mat_row(d_out, seq * time + t) + offset;
-
-        /* out = sum w[t2] v[t2], so each v earns w[t2] of the output
-         * gradient and each w earns v . d_out. */
-        for (int t2 = 0; t2 <= t; t2++) {
-            d_weights[t2] = dot(d_output, qkv_slice(qkv, seq * time + t2, VALUES, offset), head_size);
-            add_scaled(d_qkv_slice(d_qkv, seq * time + t2, VALUES, offset),
-                       weights[t2], d_output, head_size);
-        }
-
-        softmax_backward_in_place(d_weights, weights, t + 1);
-
-        /* raw[t2] = scale * (q . k[t2]) fans out to both sides. */
-        const float *query   = qkv_slice(qkv, seq * time + t, QUERIES, offset);
-        float       *d_query = d_qkv_slice(d_qkv, seq * time + t, QUERIES, offset);
-
-        for (int t2 = 0; t2 <= t; t2++) {
-            float d_raw = scale * d_weights[t2];
-
-            add_scaled(d_query, d_raw, qkv_slice(qkv, seq * time + t2, KEYS, offset), head_size);
-            add_scaled(d_qkv_slice(d_qkv, seq * time + t2, KEYS, offset),
-                       d_raw, query, head_size);
-        }
-    }
+    for (int t = 0; t < time; t++)
+        attention_position_backward(&backward, t);
 }
 
 void attention_backward(Mat d_qkv, Mat d_scores, Mat d_out, Mat qkv,
