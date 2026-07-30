@@ -84,6 +84,35 @@ static void check_utilities(void)
                && memcmp(bounded_text, BYTES, sizeof BYTES) == 0,
                "bounded slurp preserves accepted bytes");
         free(bounded_text);
+
+        fixture = fopen(path, "wb");
+        expect(fixture != NULL, "the empty-file fixture opens");
+        if (fixture != NULL) {
+            expect(fclose(fixture) == 0,
+                   "the empty-file fixture closes");
+            bounded_text = (char *)1;
+            bounded_size = 99;
+            expect(file_slurp_bounded(path, 0, &bounded_text,
+                                      &bounded_size) == FILE_SLURP_OK,
+                   "bounded slurp accepts an empty exact-ceiling file");
+            expect(bounded_text != NULL && bounded_size == 0
+                   && bounded_text[0] == '\0',
+                   "empty slurp publishes its sentinel-only buffer");
+            free(bounded_text);
+        }
+
+        bounded_size = 99;
+        expect(file_slurp_bounded(path, 0, NULL, &bounded_size)
+                   == FILE_SLURP_IO_ERROR
+               && bounded_size == 99,
+               "bounded slurp rejects a missing output address");
+
+        bounded_text = (char *)1;
+        bounded_size = 99;
+        expect(file_slurp_bounded(NULL, 0, &bounded_text, &bounded_size)
+                   == FILE_SLURP_IO_ERROR
+               && bounded_text == NULL && bounded_size == 0,
+               "bounded slurp rejects a missing path and clears outputs");
     }
     remove(path);
 
@@ -98,6 +127,28 @@ static void check_utilities(void)
                == FILE_SLURP_IO_ERROR
            && absent_text == NULL && absent_size == 0,
            "bounded slurp distinguishes I/O failure and clears outputs");
+
+    FILE *changing = fopen("/proc/self/cmdline", "rb");
+
+    if (changing != NULL) {
+        int measured_zero = fseek(changing, 0, SEEK_END) == 0
+                         && ftell(changing) == 0
+                         && fseek(changing, 0, SEEK_SET) == 0;
+        int has_bytes = measured_zero && fgetc(changing) != EOF;
+
+        fclose(changing);
+        if (has_bytes) {
+            char *changing_text = (char *)1;
+            size_t changing_size = 99;
+
+            expect(file_slurp_bounded("/proc/self/cmdline", 0,
+                                      &changing_text, &changing_size)
+                       == FILE_SLURP_IO_ERROR,
+                   "bounded slurp rejects bytes beyond the measured end");
+            expect(changing_text == NULL && changing_size == 0,
+                   "changed-file rejection leaves no partial output");
+        }
+    }
 
     FILE *binary = tmpfile();
 

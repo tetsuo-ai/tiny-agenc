@@ -3,8 +3,8 @@
 A character-level autoregressive transformer with multi-head causal
 self-attention, layernorm, GELU, residual streams, AdamW, and
 hand-written backpropagation. It trains from scratch on a CPU in about
-2,700 lines of C11 implementation code, excluding headers and tests,
-with no third-party C library dependencies.
+3,600 lines of C11 implementation code, excluding headers and tests,
+with no machine-learning framework or tensor library.
 Run it and watch noise become language in your terminal.
 
 It ships with its own dataset: **NIGHT GRID**, ~1MB of cyberpunk
@@ -22,8 +22,10 @@ DOC: We need to stay one step ahead of the chrome.
 ## Requirements
 
 The reference environment is GNU/Linux. Building the program requires a
-C11 compiler, GNU Make, the platform C library, and `libm`. The default
-build also requires compiler support for OpenMP:
+C11 compiler, GNU Make, the platform C library, `libm`, and the POSIX
+access-control-list development library. On Debian and Ubuntu, install
+the latter with `apt install libacl1-dev`. The default build also
+requires compiler support for OpenMP:
 
 ```sh
 make                 # OpenMP build
@@ -147,9 +149,9 @@ artifact checked by `make check-evidence`.
 
 ## Install
 
-The serial executable is self-contained apart from the platform C
-library and `libm`. Installation also includes the bundled checkpoint,
-licenses, version metadata, model card, and evidence record:
+The serial executable depends on the platform C library, `libm`, and
+`libacl`. Installation also includes the bundled checkpoint, licenses,
+version metadata, model card, and evidence record:
 
 ```sh
 make OPENMP=0

@@ -384,12 +384,12 @@ static int append_checksum(FILE *stream)
     off_t payload_end = ftello(stream);
     uint32_t checksum;
 
-    if (payload_end < 0 || crc32_prefix(stream, payload_end, &checksum) != 0
+    if (payload_end < 0
+        || crc32_prefix(stream, payload_end, &checksum) != 0
         || fseeko(stream, payload_end, SEEK_SET) != 0
-        || write_i32(stream, (int32_t)checksum) != 0
-        || fflush(stream) != 0)
+        || write_i32(stream, (int32_t)checksum) != 0)
         return -1;
-    return fsync(fileno(stream));
+    return fflush(stream);
 }
 ```
 
@@ -399,56 +399,55 @@ buffer toward the operating system before the same stream is reread.
 calculates through that point, `fseeko` returns there, and `write_i32`
 appends the checksum. The second `fflush` pushes the new checksum too.
 
-`fileno` recovers the operating system's integer handle from the C
-stream. The handle is called a **file descriptor**. `fsync` asks the
-operating system to synchronize the file contents and metadata needed
-to retrieve them. The later save section will separate that file
-synchronization from directory persistence.
+That last flush is not a durability promise. A later save stage
+recovers the operating system's integer handle with `fileno`. The
+handle is called a **file descriptor**. That stage synchronizes the
+complete temporary file only after its metadata is also ready.
 
-The loader refuses an enormous file before paying to checksum it. The
-source-exact gate is:
+The old load path checked the file, rewound it, then parsed it. An
+unrelated process could change bytes through the same inode between
+those two passes:
+
+```text
+checksum pass sees       A B C
+other process writes         D
+parser sees              A B D
+```
+
+The parser must consume the bytes that were checked. The loader now
+reads the bounded file once into owned memory. It calculates the CRC
+over that memory, then opens a read stream over the same allocation.
+No later filesystem write can change those owned bytes.
+
+The checksum gate over that allocation is:
 
 ```c
-static int checksum_matches(FILE *stream)
+static int snapshot_checksum_matches(const char *snapshot, size_t size)
 {
-    if (fseeko(stream, 0, SEEK_END) != 0)
+    if (size < 3 * sizeof(int32_t))
         return 0;
 
-    off_t end = ftello(stream);
-
-    if (end < (off_t)(3 * sizeof(int32_t))
-        || end > (off_t)MODEL_MAX_CHECKPOINT_FILE_BYTES)
-        return 0;
-
-    off_t   checksum_at = end - (off_t)sizeof(int32_t);
+    size_t checksum_at = size - sizeof(int32_t);
     int32_t stored;
-    uint32_t computed;
+    uint32_t computed =
+        ~crc32_update(0xFFFFFFFFu,
+                      (const unsigned char *)snapshot, checksum_at);
 
-    if (fseeko(stream, checksum_at, SEEK_SET) != 0
-        || read_i32(stream, &stored) != 0
-        || crc32_prefix(stream, checksum_at, &computed) != 0
-        || (uint32_t)stored != computed)
-        return 0;
-    return fseeko(stream, 0, SEEK_SET) == 0;
+    memcpy(&stored, snapshot + checksum_at, sizeof stored);
+    return computed == (uint32_t)stored;
 }
 ```
 
-The first seek and `ftello` find the exact file length. The preliminary
-minimum guarantees only two opening words and the final checksum. Later
-parsing still requires the full header. The maximum blocks a padded
-multi-gigabyte file before the CRC scan.
+The size check proves room for magic, version, and the final checksum.
+The final four bytes begin at `checksum_at`. `crc32_update` visits every
+earlier byte in the allocation, and `memcpy` reads the stored native
+integer without assuming that its address meets an integer alignment.
+The comparison is between the resulting 32-bit patterns.
 
-`checksum_at` is four bytes before the end. The loader reads the stored
-word there, calculates the prefix ending immediately before it, and
-compares the bit patterns as `uint32_t`. Success rewinds the stream so
-ordinary parsing can start at byte zero.
-
-Checksum validation and parsing are two passes over the same open file.
-Tiny AgenC's own writer replaces a completed file by rename, so it does
-not modify that open file in place. An unrelated writer that changes
-the same underlying open file between the two passes could make the
-parsed bytes differ from the checked bytes. TAGC version 1 does not
-defend against that concurrent in-place mutation.
+The file-sized allocation plus the stream over it is an **immutable
+byte snapshot** for this load. Immutable here means that the loader
+never changes it and later changes to the path cannot reach it. It does
+not mean the original file has become read-only.
 
 ## Count bytes and memory separately
 
@@ -515,54 +514,102 @@ to call `model_new` for this configuration?
 No. The header's file request is small, but one runtime region is
 already four times the complete checkpoint resident ceiling.
 
-The source reuses Chapter 10's allocation-free
+The source first calculates both demands without allocating. This
+source-exact helper uses Chapter 10's
 [model memory
 report](10-memory-planning.md#the-public-memory-report-is-an-independent-calculation):
 
 ```c
-static int checkpoint_config_supported(ModelConfig cfg)
+static int checkpoint_layout(ModelConfig cfg, CheckpointLayout *layout)
 {
-    ModelMemory memory;
-    size_t parameter_floats = model_parameter_float_count(cfg);
-    size_t fixed_bytes =
-        (CHECKPOINT_HEADER_I32S + CHECKPOINT_TOKENIZER_SIZE_I32S
-         + CHECKPOINT_CHECKSUM_I32S) * sizeof(int32_t);
+    CheckpointLayout candidate = {0};
+    size_t fixed_bytes = checkpoint_fixed_bytes();
 
-    if (!model_memory_requirements(cfg, &memory)
-        || memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES
-        || parameter_floats > SIZE_MAX / sizeof(float))
+    candidate.parameter_floats = model_parameter_float_count(cfg);
+    if (!model_memory_requirements(cfg, &candidate.memory)
+        || candidate.parameter_floats > SIZE_MAX / sizeof(float))
         return 0;
 
-    size_t parameter_bytes = parameter_floats * sizeof(float);
+    candidate.parameter_bytes =
+        candidate.parameter_floats * sizeof(float);
+    if (fixed_bytes > MODEL_MAX_CHECKPOINT_FILE_BYTES
+        || (size_t)cfg.vocab_size
+           > MODEL_MAX_CHECKPOINT_FILE_BYTES - fixed_bytes
+        || candidate.parameter_bytes
+           > MODEL_MAX_CHECKPOINT_FILE_BYTES - fixed_bytes
+            - (size_t)cfg.vocab_size)
+        return 0;
 
-    return fixed_bytes <= MODEL_MAX_CHECKPOINT_FILE_BYTES
-        && (size_t)cfg.vocab_size
-           <= MODEL_MAX_CHECKPOINT_FILE_BYTES - fixed_bytes
-        && parameter_bytes
-           <= MODEL_MAX_CHECKPOINT_FILE_BYTES - fixed_bytes
-            - (size_t)cfg.vocab_size;
+    candidate.file_bytes =
+        fixed_bytes + (size_t)cfg.vocab_size + candidate.parameter_bytes;
+    if (candidate.memory.total_bytes
+        > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES)
+        return 0;
+    *layout = candidate;
+    return 1;
 }
 ```
 
-The report first validates the dimensions and performs Chapter 10's
-checked calculations for parameter buffers, arenas, gradients, and
-cached ids. Anything above one GiB is rejected before construction.
-The next check proves the float-byte multiplication fits `size_t`.
+`candidate` keeps a failed calculation from publishing a partial
+layout. The parameter count and Chapter 10 report are both derived from
+`cfg`. The division check proves that converting the float count to
+bytes cannot wrap.
 
-Only then does the function calculate parameter bytes. The final
-subtractions are ordered so no unsigned expression can wrap. Together
-they prove that fixed fields, alphabet, and parameter payload fit the
-file ceiling.
+The ordered subtractions prove that fixed fields, alphabet, and
+parameter values fit the file ceiling. Only after those checks does the
+code add the three pieces into `file_bytes`. The separate resident
+check rejects the 4,213-byte hostile request because its model report
+exceeds one GiB. The final assignment publishes a complete layout.
 
-These allocation-free file and resident checks are the **checkpoint
-resource preflight**. They reject the 4,213-byte hostile request before
-`model_new`.
+Loading now owns a file-sized snapshot at the same time as the model.
+Checking each owner against one GiB separately would allow their sum to
+cross the policy:
 
-Overflow is failure, not a smaller allocation.
+```text
+snapshot allocation       300 MiB
+model-owned memory        800 MiB
+separate checks              pass
+combined resident use    1,100 MiB
+combined check               fail
+```
 
-Save and load both call this predicate. A locally constructed model can
-be legal under the public geometry rules yet deliberately unsupported
-by this checkpoint policy.
+Chapter 2's bounded reader adds one byte for its terminating zero, even
+though the binary parser does not consume that byte. The source-exact
+combined check counts it:
+
+```c
+static int snapshot_fits_resident_limit(
+    const LoadCandidate *candidate, const CheckpointLayout *layout)
+{
+    if (candidate->snapshot_size == SIZE_MAX)
+        return 0;
+
+    size_t allocated_snapshot = candidate->snapshot_size + 1;
+
+    return allocated_snapshot <= MODEL_MAX_CHECKPOINT_RESIDENT_BYTES
+        && layout->memory.total_bytes
+           <= MODEL_MAX_CHECKPOINT_RESIDENT_BYTES - allocated_snapshot;
+}
+```
+
+The first check makes `snapshot_size + 1` safe. The final comparison is
+written as subtraction, so adding the two allocations cannot wrap.
+That exact sum is the load-side **checkpoint resource preflight**:
+
+```text
+(file bytes + terminating byte) + model-owned bytes <= 1 GiB
+```
+
+Here `model-owned bytes` means the four payload families in Chapter
+10's report: parameter buffers, value arena, gradient arena, and cached
+ids. The bound is exact for those families and the snapshot allocation.
+Small structures, allocator metadata, and the construction RNG remain
+outside it, as Chapter 10 records.
+
+Overflow is failure, not a smaller allocation. Save checks the model
+and file layout. Load additionally counts the immutable snapshot before
+`model_new`. A locally constructed model can be legal under the public
+geometry rules yet deliberately unsupported by this checkpoint policy.
 
 ## Keep the alphabet attached to its rows
 
@@ -671,11 +718,11 @@ Neither. Opening with `"wb"` truncated A before B was ready.
 
 The destination must not change until every byte of B is ready.
 
-Construct a neighboring name:
+Construct a neighboring file:
 
 ```text
 trained.bin                 visible complete model A
-trained.bin.tmp.4kP9sQ      separate temporary B under construction
+.tiny-agenc-7b2c...         separate temporary B under construction
 ```
 
 If B fails, remove the temporary file and leave A alone. If B succeeds,
@@ -698,152 +745,368 @@ boundary sees complete A or complete B. It does not see B halfway
 through. Building beside the destination and then renaming is
 **atomic file replacement**.
 
-The first half of
-[`model_save`](../src/checkpoint.c) creates and owns that temporary
-file. This shortened source excerpt begins after the function opening:
+That promise covers readers while the save runs. A process with the
+same filesystem authority can also rename entries in the destination
+directory or change the existing file's metadata. The caller must
+exclude both kinds of concurrent change during the save.
+
+There is another name race to close. Suppose the save checks
+`runs/trained.bin`, then an unrelated operation replaces `runs` before
+the temporary file is created. Looking up the path again could inspect
+one directory and write into another.
+
+Split the path once into a parent and one final name. Open the parent
+directory, keep its descriptor, and perform later lookups with
+`fstatat`, `openat`, `renameat`, and `unlinkat` relative to that same
+descriptor:
+
+```text
+"runs/trained.bin"
+        |
+        +-> open "runs" once -> directory descriptor 5
+        |
+        +-> use name "trained.bin" relative to descriptor 5
+```
+
+The directory descriptor, rather than a repeated text path lookup, is
+the stable reference for the transaction. This is an **anchored parent
+directory**.
+
+Empty final names and the special names `.` and `..` do not identify a
+checkpoint file, so path splitting rejects them. `fstatat` asks what
+the final name itself selects without following an indirect entry:
+
+```text
+name is absent                  allow creation
+name selects a regular file     allow replacement
+name selects anything else      reject
+lookup fails for another reason reject
+```
+
+Only the operating system's not-found result means absent. Permission
+and I/O failures are not mistaken for permission to create.
+
+When a target exists, `openat` uses `O_NOFOLLOW`, then `fstat` proves
+that the opened descriptor still has the device and inode numbers
+recorded by `fstatat`. A changed object, indirect entry, directory,
+device, pipe, or socket fails before a temporary file is committed. An
+absent destination remains allowed.
+
+The temporary name does not borrow user-controlled destination text.
+`getrandom` supplies 16 bytes, and `format_temp_name` writes their 32
+hexadecimal digits after `.tiny-agenc-`. `openat` uses
+`O_CREAT | O_EXCL`, so creation succeeds only if that exact name is
+absent. A collision draws a fresh name; any other failure stops.
+
+Requested mode `0600` is an upper bound during creation: the process
+mask can remove bits, and a default directory ACL can affect the
+resulting access record. It requests no access beyond owner read and
+write. The later `fchmod` makes the final mode bits exactly `0600`.
+
+Before the first descriptor becomes a C stream, `fcntl` with
+`F_DUPFD_CLOEXEC` makes a second descriptor for the same temporary
+inode. The first descriptor carries the payload and closes after file
+sync. The duplicate stays open through commit or cleanup and stays out
+of an executed child process.
+
+`fstat` records the duplicate's device and inode and proves it is
+regular. Keeping that descriptor open prevents the inode number from
+being released and reused while the name is checked. Commit and cleanup
+act on the temporary name only when a fresh `fstatat` finds that same
+identity.
+
+Linux provides no rename-or-unlink operation conditioned on an inode
+number. A same-authority writer could still replace the random name
+after the check and before the name operation. The 128 random bits keep
+the name out of ordinary collisions; they do not widen the concurrency
+contract above.
+
+### Preserve the old file's access rules
+
+Replacing a directory entry selects a new inode. Even when the payload
+is correct, creating that inode with mode `0600` can discard rules
+attached to the old one.
+
+Start with the familiar permission bits:
+
+```text
+owner     read write execute
+group     read write execute
+other     read write execute
+special   set-user-ID set-group-ID sticky
+```
+
+The first nine use mask `0777`. Including the three special bits gives
+mask `07777`. Tiny AgenC records all twelve, plus the numeric owner and
+group IDs.
+
+Some files grant named users or groups access that those twelve bits
+cannot express. Linux stores that rule as a separate access record.
+The record is a POSIX **access-control list**, or **ACL**. Tiny AgenC
+reads and writes it through libacl's `acl_get_fd` and `acl_set_fd`
+instead of treating its binary encoding as an ordinary attribute.
+
+A file can also carry named byte strings such as `user.review`,
+`security.capability`, or `security.selinux`. The value may contain
+zero bytes or may have length zero. These records are **extended
+attributes**, shortened to **xattrs**.
+
+The save manages every xattr reported by `flistxattr` except
+`system.posix_acl_access`, which libacl owns. It captures names and
+exact byte counts, applies them after ownership, removes unmatched
+attributes from the temporary inode, then reads everything back.
+
+Some attributes describe an inode's content or use a different ACL
+model. Copying them to new bytes would make a false promise. The
+source-exact rejection list is:
 
 ```c
-    static const char TEMP_SUFFIX[] = ".tmp.XXXXXX";
-    size_t path_length = strlen(path);
+static int xattr_is_unsupported(const char *name)
+{
+    return strcmp(name, "system.posix_acl_default") == 0
+        || strcmp(name, "system.nfs4_acl") == 0
+        || strcmp(name, "system.nfs4acl") == 0
+        || strcmp(name, "trusted.nfs4_acl") == 0
+        || strcmp(name, "security.ima") == 0
+        || strcmp(name, "security.evm") == 0;
+}
+```
 
-    if (!checkpoint_config_supported(m->cfg)
-        || tokenizer_vocab_size(tk) != m->cfg.vocab_size
-        || path_length > SIZE_MAX - sizeof TEMP_SUFFIX)
+The first name belongs on directories, not a regular checkpoint. The
+next three represent NFSv4 ACL data that libacl's POSIX access-ACL
+comparison does not preserve. IMA and EVM values can authenticate or
+protect the old inode's bytes and metadata. Encountering any listed
+name stops before replacement.
+
+Ordinary captured xattrs include Linux capability and SELinux labels
+when the filesystem reports them. Applying ownership or security
+metadata can require privilege. Failure is not downgraded into silent
+metadata loss.
+
+This source-exact helper applies the captured metadata:
+
+```c
+static int apply_metadata(int descriptor,
+                          const CheckpointMetadata *metadata)
+{
+    if (fchown(descriptor, metadata->uid, metadata->gid) != 0
+        || acl_set_fd(descriptor, metadata->access_acl) != 0
+        || fchmod(descriptor, metadata->mode) != 0
+        || apply_saved_xattrs(descriptor, metadata) != 0
+        || remove_unmatched_xattrs(descriptor, metadata) != 0)
+        return -1;
+    return metadata_matches(descriptor, metadata) ? 0 : -1;
+}
+```
+
+The order matters. `fchown` can clear set-user-ID and set-group-ID bits,
+so ownership is applied first. `acl_set_fd` can adjust permission bits,
+so `fchmod` restores the exact `07777` mask after it. Then xattrs are
+set and any unrecorded xattr on the new inode is removed.
+
+`metadata_matches` rereads UID, GID, all twelve mode bits, the access
+ACL, the complete managed xattr name set, every xattr length, and every
+value byte. A mismatch returns failure while the old destination is
+still in place.
+
+### Synchronize bytes, then the name
+
+The payload, metadata, and directory entry become ready at different
+times. Work through this order:
+
+```text
+probe parent-directory synchronization before creating a temporary
+write header, vocabulary, parameters, checksum
+apply and verify old metadata when replacing a file
+synchronize the temporary file
+close the temporary file
+recheck the old destination's identity and metadata
+rename the temporary file
+synchronize and close the parent directory
+```
+
+The first directory sync proves that this filesystem accepts the
+operation before the save creates or replaces anything. It does not
+confirm a future rename, so the final directory sync remains required.
+
+If writing or metadata work fails, the old name still selects A.
+Synchronizing the temporary before close asks the filesystem to persist
+B's bytes and the metadata needed to retrieve them. The source-exact
+stage is:
+
+```c
+static int prepare_temporary_checkpoint(
+    SaveTransaction *transaction, const Model *m, const Tokenizer *tk)
+{
+    if (write_checkpoint(transaction->stream, m, tk) != 0)
         return -1;
 
-    char *temp_path = emalloc(path_length + sizeof TEMP_SUFFIX);
+    int descriptor = fileno(transaction->stream);
 
-    memcpy(temp_path, path, path_length);
-    memcpy(temp_path + path_length, TEMP_SUFFIX, sizeof TEMP_SUFFIX);
-
-    int descriptor = mkstemp(temp_path);
-
-    if (descriptor < 0) {
-        free(temp_path);
+    if (descriptor < 0)
         return -1;
+    if ((transaction->path.target_exists
+         && apply_metadata(descriptor, &transaction->metadata) != 0)
+        || (!transaction->path.target_exists
+            && fchmod(descriptor, 0600) != 0))
+        return -1;
+    if (fsync(descriptor) != 0)
+        return -1;
+    return transaction_close_stream(transaction);
+}
+```
+
+`write_checkpoint` performs the TAGC v1 writes and final C-stream
+flush. `fileno` retrieves the descriptor. Existing metadata is applied
+and verified before `fsync`. For a new destination, `fchmod` forces
+mode `0600` after creation so the process mask or an inherited default
+access rule cannot leave different mode bits. A sync or close failure
+prevents rename.
+
+The original file is checked once more just before commit. For an
+existing destination, rename replaces only the same regular inode whose
+metadata was captured. For an initially absent destination,
+`RENAME_NOREPLACE` refuses to overwrite a file that appeared during the
+save. The source-exact commit is:
+
+```c
+static int commit_temporary_checkpoint(SaveTransaction *transaction)
+{
+    int renamed;
+
+    if (close_original_destination(transaction) != 0
+        || !path_matches_temporary_file(transaction,
+                                        transaction->temp_name))
+        return -1;
+    if (transaction->path.target_exists) {
+        renamed =
+            renameat(transaction->path.directory, transaction->temp_name,
+                     transaction->path.directory,
+                     transaction->path.name);
+    } else {
+        renamed =
+            renameat2(transaction->path.directory, transaction->temp_name,
+                      transaction->path.directory,
+                      transaction->path.name, RENAME_NOREPLACE);
     }
-```
-
-Policy and tokenizer size are checked before creating anything.
-The path-length comparison makes the allocation addition safe.
-`sizeof TEMP_SUFFIX` includes the terminating zero byte, so the two
-`memcpy` calls produce a complete C string.
-
-`mkstemp` requires the final six `X` characters. It replaces them with
-a unique suffix, creates the file exclusively, opens it, and returns
-its file descriptor. Because the template begins with the destination
-path, the temporary file is in the same directory and therefore the
-same filesystem as the destination.
-
-The source next handles existing access bits. This is the next
-source-exact fragment:
-
-```c
-    struct stat existing;
-
-    if (stat(path, &existing) == 0
-        && fchmod(descriptor, existing.st_mode & 0777) != 0) {
-        close(descriptor);
-        remove(temp_path);
-        free(temp_path);
+    if (renamed != 0)
         return -1;
-    }
+    transaction->renamed = 1;
+    transaction->temp_name[0] = '\0';
+    return 0;
+}
 ```
 
-`stat` fills a `struct stat` with file metadata. `st_mode` contains
-file-type and permission bits. The leading zero makes `0777` an
-**octal integer literal** in C. Its nine one bits select the owner's,
-group's, and others' read, write, and execute permissions. `fchmod`
-applies only those selected bits to the new descriptor.
+`close_original_destination` first compares the open old descriptor's
+metadata and current destination identity before closing it.
+`path_matches_temporary_file` then proves the temporary name still
+selects the transaction's recorded inode immediately before rename.
+Both rename calls use the already opened directory for source and
+destination. After a successful rename, clearing `temp_name` prevents
+cleanup from unlinking a name that no longer exists.
 
-If metadata lookup succeeds but changing the permissions fails, the
-descriptor is closed, the temporary name is removed, and its allocated
-path is freed. If `stat` itself fails, this implementation continues
-with `mkstemp`'s permissions. It does not distinguish a missing
-destination from other metadata errors, and it does not copy ownership,
-access-control lists, or other metadata.
-
-The descriptor is an operating-system handle, not a buffered C stream.
-The next source-exact fragment supplies the stream operations used
-throughout the book:
-
-```c
-    FILE *stream = fdopen(descriptor, "w+b");
-
-    if (stream == NULL) {
-        close(descriptor);
-        remove(temp_path);
-        free(temp_path);
-        return -1;
-    }
-```
-
-`fdopen` wraps the existing descriptor in a `FILE *` open for both
-writing and reading in binary mode. On success, closing the stream will
-also close its descriptor. On failure, no stream took ownership, so the
-code closes the descriptor directly.
-
-The final shortened source excerpt contains the write and commit half:
-
-```c
-    int failed = write_i32(stream, (int32_t)CHECKPOINT_MAGIC) != 0
-              || write_i32(stream, CHECKPOINT_VERSION) != 0
-              || write_i32(stream, m->cfg.vocab_size) != 0
-              || write_i32(stream, m->cfg.block_size) != 0
-              || write_i32(stream, m->cfg.d_model) != 0
-              || write_i32(stream, m->cfg.head_count) != 0
-              || write_i32(stream, m->cfg.layer_count) != 0
-              || write_i32(stream, m->cfg.batch_size) != 0
-              || tokenizer_write(tk, stream) != 0;
-
-    for (int i = 0; !failed && i < m->param_count; i++)
-        failed = param_write(m->params[i], stream) != 0;
-    if (!failed)
-        failed = append_checksum(stream) != 0;
-    if (fclose(stream) != 0)
-        failed = 1;
-    if (!failed && rename(temp_path, path) != 0)
-        failed = 1;
-    if (failed)
-        remove(temp_path);
-    free(temp_path);
-    return failed ? -1 : 0;
-```
-
-C's `||` evaluates left to right and stops at the first true operand.
-The header and tokenizer sequence therefore stops on its first failed
-write. The registry loop does the same for parameters.
-
-`append_checksum` flushes, rereads, appends, flushes, and synchronizes
-the completed temporary file. `fclose` reports a final buffered close
-failure. Only a fully successful file reaches `rename`.
-
-`rename` replaces the destination's directory entry atomically on the
-local same-filesystem boundary. A handled failure removes the temporary
-name, although `remove` itself is best effort here: its return value is
-ignored, so a failed cleanup can leave a `.tmp.*` file. A process crash
-can leave one too. If there was no old destination, a failed first save
-leaves no checkpoint.
-
-File contents and the directory's name-to-file mapping are separate
-persistent state:
+The rename has changed visible state, but file contents and the
+directory's name-to-file mapping are separate persistent state:
 
 ```text
 temporary B contents synchronized        yes
 rename trained.bin from A to B            completed while running
-directory record for that rename          not synchronized here
+directory record for that rename          not synchronized yet
 ```
 
-Suppose power fails after the second line. The source has asked for B's
-bytes to reach storage, but it has not asked the parent directory's
-updated mapping to do the same. Recovery behavior is filesystem
-dependent; this code cannot promise whether the recovered name selects
-the old or new file.
+The save now calls `fsync` on the open parent directory after rename,
+then closes it. That final sync is what confirms the new mapping.
 
 **Durability** is the promise that acknowledged state survives a crash
-or power loss. Tiny AgenC synchronizes the completed file and provides
-atomic runtime replacement. Without parent-directory synchronization,
-it does not claim a universal power-loss durability guarantee.
+or power loss on the documented GNU/Linux local-filesystem boundary.
+Tiny AgenC claims it only after temporary-file sync, close, rename, and
+parent-directory sync and close all succeed.
+
+### Report what happened after rename
+
+A two-way success/failure return loses information at one sharp point.
+Suppose rename succeeds, then directory sync fails:
+
+```text
+trained.bin now names complete B      yes
+crash recovery confirmed              no
+old A can be restored safely          no
+```
+
+Returning an ordinary failure sounds as though A remains. Returning
+ordinary success claims durability that was not confirmed. Rolling back
+would require another rename whose own durability could fail.
+
+The caller needs three outcomes:
+
+```text
+failure before rename      destination not replaced
+rename and directory sync  replacement durable
+rename, directory failure  replacement visible, durability unconfirmed
+```
+
+The public names for those constructed states are
+`MODEL_SAVE_NOT_COMMITTED`, `MODEL_SAVE_DURABLE`, and
+`MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED`.
+
+This source-exact function keeps the commit point visible:
+
+```c
+ModelSaveResult model_save_durable(const Model *m, const Tokenizer *tk,
+                                   const char *path)
+{
+    CheckpointLayout layout;
+
+    if (m == NULL || tk == NULL || path == NULL
+        || !checkpoint_layout(m->cfg, &layout)
+        || model_parameter_count(m) != layout.parameter_floats
+        || tokenizer_vocab_size(tk) != m->cfg.vocab_size)
+        return MODEL_SAVE_NOT_COMMITTED;
+
+    SaveTransaction transaction;
+    ModelSaveResult result = MODEL_SAVE_NOT_COMMITTED;
+
+    transaction_init(&transaction);
+    if (prepare_transaction(&transaction, path) != 0
+        || prepare_temporary_checkpoint(&transaction, m, tk) != 0
+        || commit_temporary_checkpoint(&transaction) != 0)
+        goto done;
+
+    result = confirm_directory_update(&transaction);
+
+done:
+    transaction_cleanup(&transaction);
+    return result;
+}
+```
+
+Invalid pointers and unsupported geometry fail before transaction
+setup. The registry scalar count must match the layout count, and the
+tokenizer size must match `V`. `result` begins in the only correct
+pre-rename state. Preparation opens the path and temporary file,
+writing makes the candidate complete, and commit performs rename. Only
+after commit can `confirm_directory_update` choose between durable and
+visible-but-unconfirmed.
+
+`transaction_cleanup` closes owned descriptors and streams, frees
+captured metadata, and unlinks only this transaction's still-named
+temporary file. After rename the temporary name has been cleared, so
+cleanup never tries to undo the published checkpoint.
+
+Existing callers can still use `model_save`. Its complete wrapper is:
+
+```c
+int model_save(const Model *m, const Tokenizer *tk, const char *path)
+{
+    return model_save_durable(m, tk, path) == MODEL_SAVE_DURABLE
+        ? 0 : -1;
+}
+```
+
+It returns zero only for confirmed durability. Its nonzero result does
+not prove that replacement was avoided, because it also represents the
+visible-but-unconfirmed state. A caller that must distinguish the
+post-commit state uses `model_save_durable`.
 
 ## Validate before publishing
 
@@ -851,21 +1114,19 @@ The loader must reject bad bytes without publishing half-built objects.
 Its gates run in source order:
 
 ```text
-file size and CRC
+bounded immutable snapshot and CRC
         |
 magic, version, geometry
         |
-resident-memory and file policy
+exact TAGC v1 size and combined resident policy
         |
 canonical tokenizer and matching V
-        |
-exact remaining payload length
         |
 construct candidate model
         |
 registry count and every finite parameter
         |
-final checksum field and end of file
+checksum field, clean end of snapshot, successful close
         |
 publish Model and Tokenizer
 ```
@@ -876,7 +1137,37 @@ tokenizer has been built, should the caller receive that tokenizer?
 No. A late failure must free every candidate and leave the output
 pointer `NULL`.
 
-Start with [`read_config`](../src/checkpoint.c):
+Start by making the owned snapshot. This complete function is
+source-exact:
+
+```c
+static int load_snapshot(LoadCandidate *candidate, const char *path)
+{
+    if (path == NULL
+        || file_slurp_bounded(path, MODEL_MAX_CHECKPOINT_FILE_BYTES,
+                              &candidate->snapshot,
+                              &candidate->snapshot_size)
+           != FILE_SLURP_OK
+        || !snapshot_checksum_matches(candidate->snapshot,
+                                      candidate->snapshot_size))
+        return -1;
+
+    candidate->stream =
+        fmemopen(candidate->snapshot, candidate->snapshot_size, "rb");
+    return candidate->stream == NULL ? -1 : 0;
+}
+```
+
+A null path fails before I/O. Chapter 2's bounded reader publishes a
+complete allocation only when the file fits the outer ceiling and ends
+cleanly. CRC is then calculated over that allocation. `fmemopen`
+creates the ordinary `FILE *` parser interface over the same bytes.
+
+No header field has influenced an allocation yet. If the checksum
+fails, candidate cleanup frees the snapshot without constructing a
+tokenizer or model.
+
+`read_config` still owns the opening fields:
 
 ```c
 static int read_config(FILE *stream, ModelConfig *cfg)
@@ -907,48 +1198,85 @@ represent the required values. The final call applies Chapter 1's
 positive bounds, row ceiling, and equal head division before any memory
 calculation.
 
-After the tokenizer has been read, the stream is exactly where parameter
-values should begin. The reader compares remaining file bytes with the
-formula:
+The next complete helper is source-exact:
 
 ```c
-static int payload_size_matches(FILE *stream, ModelConfig cfg)
+static int load_header_and_tokenizer(
+    LoadCandidate *candidate, CheckpointLayout *layout)
 {
-    off_t here = ftello(stream);
+    ModelConfig cfg;
 
-    if (here < 0 || fseeko(stream, 0, SEEK_END) != 0)
-        return 0;
+    if (read_config(candidate->stream, &cfg) != 0
+        || !checkpoint_layout(cfg, layout)
+        || layout->file_bytes != candidate->snapshot_size
+        || !snapshot_fits_resident_limit(candidate, layout))
+        return -1;
 
-    off_t end = ftello(stream);
-    size_t parameter_floats = model_parameter_float_count(cfg);
+    candidate->tokenizer = tokenizer_read(candidate->stream);
+    if (candidate->tokenizer == NULL
+        || tokenizer_vocab_size(candidate->tokenizer) != cfg.vocab_size)
+        return -1;
 
-    if (end < here || end - here < (off_t)sizeof(int32_t)
-        || parameter_floats > SIZE_MAX / sizeof(float)
-        || fseeko(stream, here, SEEK_SET) != 0)
-        return 0;
-    return (uintmax_t)(end - here - (off_t)sizeof(int32_t))
-        == (uintmax_t)parameter_floats * sizeof(float);
+    candidate->model = model_new(cfg, 0);
+    return model_parameter_count(candidate->model)
+        == layout->parameter_floats ? 0 : -1;
 }
 ```
 
-`here` remembers the first parameter byte. The function seeks to the
-end and proves there is room for the final checksum. It then returns to
-`here`. Casts to `uintmax_t`, the widest unsigned integer type available
-for this comparison, let the offset difference and `size_t` product
-meet without narrowing either. Equality rejects both truncation and
-trailing data.
+Header parsing comes first. `checkpoint_layout` derives the one valid
+TAGC v1 size from those dimensions. Equality with `snapshot_size`
+rejects truncation and trailing bytes before a tokenizer or model is
+allocated. The combined resident check then proves room for both the
+still-owned snapshot and the requested model.
 
-Replay the tiny file at this gate:
+Replay the tiny file at this equality:
 
 ```text
-here                              38
-end                              130
-bytes after tokenizer and check  130 - 38 - 4 = 88
-expected parameter bytes          22 * 4 = 88
+fixed fields                       40 bytes
+alphabet                            2 bytes
+parameter values                   88 bytes
+layout file_bytes                 130 bytes
+snapshot_size                     130 bytes
 ```
 
-The two 88-byte results match. A 131st byte would make the left side 89
-and fail.
+The two 130-byte results match. A 131st byte fails.
+
+Only then does `tokenizer_read` reconstruct the canonical alphabet and
+prove its count equals `V`. `model_new(cfg, 0)` constructs the candidate
+model. It needs a seed because ordinary construction initializes
+parameters. Every saved value will overwrite those initial values, so
+the zero seed has no surviving effect on loaded parameters.
+
+The registry count is compared with the scalar count used to derive the
+file size. Loading then walks every registry entry through Chapter 8's
+finite-value gate.
+
+After the parameters, one checksum word must remain. It was already
+compared against the snapshot prefix. The parser still has to consume
+that field, prove that no byte follows it, distinguish clean EOF from a
+stream error, and observe close failure. The complete source-exact
+helper does all four:
+
+```c
+static int consume_checkpoint_trailer(LoadCandidate *candidate)
+{
+    int32_t checksum;
+
+    if (read_i32(candidate->stream, &checksum) != 0
+        || fgetc(candidate->stream) != EOF
+        || ferror(candidate->stream))
+        return -1;
+
+    FILE *stream = candidate->stream;
+
+    candidate->stream = NULL;
+    return fclose(stream);
+}
+```
+
+The stream pointer moves into a local before the candidate field is
+cleared. That prevents later cleanup from closing it twice. The return
+value of `fclose` is the stage result.
 
 Now walk
 [`model_load`](../src/checkpoint.c). This is the complete production
@@ -961,104 +1289,42 @@ Model *model_load(Tokenizer **tk, const char *path)
         return NULL;
     *tk = NULL;
 
-    FILE *stream = fopen(path, "rb");
-    ModelConfig cfg;
-    if (stream == NULL)
-        return NULL;
-    if (!checksum_matches(stream)
-        || read_config(stream, &cfg) != 0
-        || !checkpoint_config_supported(cfg)) {
-        fclose(stream);
-        return NULL;
-    }
+    LoadCandidate candidate;
+    CheckpointLayout layout;
+    Model *model = NULL;
 
-    Tokenizer *loaded_tk = tokenizer_read(stream);
+    load_candidate_init(&candidate);
+    if (load_snapshot(&candidate, path) != 0
+        || load_header_and_tokenizer(&candidate, &layout) != 0
+        || load_checkpoint_parameters(&candidate) != 0
+        || consume_checkpoint_trailer(&candidate) != 0)
+        goto done;
+    model = publish_load_candidate(&candidate, tk);
 
-    if (loaded_tk == NULL
-        || tokenizer_vocab_size(loaded_tk) != cfg.vocab_size) {
-        if (loaded_tk != NULL)
-            tokenizer_free(loaded_tk);
-        fclose(stream);
-        return NULL;
-    }
-
-    if (!payload_size_matches(stream, cfg)) {
-        tokenizer_free(loaded_tk);
-        fclose(stream);
-        return NULL;
-    }
-
-    Model *m = model_new(cfg, 0);
-
-    if (model_parameter_count(m) != model_parameter_float_count(cfg)) {
-        model_free(m);
-        tokenizer_free(loaded_tk);
-        fclose(stream);
-        return NULL;
-    }
-
-    for (int i = 0; i < m->param_count; i++) {
-        if (param_read(m->params[i], stream) != 0) {
-            model_free(m);
-            tokenizer_free(loaded_tk);
-            fclose(stream);
-            return NULL;
-        }
-    }
-
-    int32_t checksum;
-
-    if (read_i32(stream, &checksum) != 0 || fgetc(stream) != EOF) {
-        model_free(m);
-        tokenizer_free(loaded_tk);
-        fclose(stream);
-        return NULL;
-    }
-
-    fclose(stream);
-    *tk = loaded_tk;
-    return m;
+done:
+    load_candidate_free(&candidate);
+    return model;
 }
 ```
 
 A missing output pointer cannot receive ownership, so it fails first.
-`*tk = NULL` establishes the failure result before the file is opened.
-Every later rejection either owns nothing or frees its candidate
-objects before returning. Files are input. They do not earn assertions.
+`*tk = NULL` establishes the failure result before reading the path.
+The candidate begins with no owners, and the four named stages run in
+order. C's `||` stops at the first failure.
 
-The first combined gate checks the complete-file envelope and CRC,
-parses the header, and applies the resource policy. The tokenizer is
-then reconstructed by Chapter 3's reader and compared with `V`.
-Exact payload length is proved before model allocation.
+Only the success path calls `publish_load_candidate`. That helper moves
+the model and tokenizer out of the candidate and clears its pointers.
+The shared cleanup then closes and frees everything still owned,
+including the snapshot. The caller never receives a partial tokenizer
+or model.
 
-`model_new(cfg, 0)` needs a seed because ordinary construction
-initializes parameters. Every saved value will overwrite those initial
-values, so the chosen zero seed has no surviving effect on the loaded
-parameters. Construction also creates zeroed parameter-gradient and
-moment buffers plus the planned arenas. The activation-gradient arena
-still needs Chapter 12's explicit clear before backward.
-
-The one-GiB preflight bounds the allocation request; it cannot promise
-that the machine currently has that memory available. Allocation
-failure still follows the project's fatal allocator policy rather than
-returning `NULL`.
-
-The next comparison is an internal cross-check. The scalar formula
-used for the file must equal the count in the registry actually created
-for this model. Each registry entry then reads its exact number of
-finite values.
-
-The stored checksum word is consumed after the parameters. It was
-already compared during the first pass. `fgetc` asks for one more byte;
-`EOF` means no byte remains. In C, the same `EOF` result can also
-represent a read error. The source does not call `feof` and `ferror` to
-separate those cases, and it ignores a final successful-path `fclose`
-error. Its reliable public failures are the open, read, format, and
-resource-policy failures checked explicitly above.
-
-Only after all gates does ownership cross the API boundary:
-`*tk = loaded_tk`, and the model pointer is returned. The caller never
-receives a partial tokenizer or model.
+The combined preflight bounds the requested allocation; it cannot
+promise that the machine currently has that memory available.
+Allocation failure still follows the project's fatal allocator policy
+rather than returning `NULL`. Construction also creates zeroed
+parameter-gradient and moment buffers plus the planned arenas. The
+activation-gradient arena still needs Chapter 12's explicit clear
+before backward.
 
 ## State the version 1 promise exactly
 
@@ -1120,20 +1386,21 @@ would need a new version and more fields.
 
 ## Know what the witnesses prove
 
-The focused [`labs/check13.c`](../labs/check13.c) witness makes four
+The focused [`labs/check13.c`](../labs/check13.c) witness makes six
 checkpoint claims:
 
 ```text
-saved parameter-object shapes and every parameter value bit round-trip
+a save reports confirmed durability and every parameter bit round-trips
+an indirect non-regular destination is rejected before commit
+invalid save input reports that no replacement was committed
 one changed finite payload bit is rejected by CRC32
 the legacy magic is rejected even after its CRC is recomputed
 the complete 4,213-byte resource fixture is rejected before construction
 ```
 
-Its 18 checks include fixture creation, seeking, writing, and closing.
+Its 21 checks include fixture creation, seeking, writing, and closing.
 It does not compare every configuration field or tokenizer byte. Its
-successful-save check does not observe a concurrent reader or simulate
-a crash.
+successful-save check does not simulate a crash.
 
 The broader integration witness also checks configuration,
 every vocabulary id, loaded forward loss, a seeded generation replay,
@@ -1141,30 +1408,82 @@ unknown versions, invalid dimensions, malformed tokenizer order,
 nonfinite values, truncation, trailing data, an oversized file, and
 preservation of the old destination after a handled nonfinite save.
 
-Neither witness proves CRC collision resistance, authentication,
-permission propagation, concurrent in-place mutation, process-crash
-recovery, power-loss recovery, or parent-directory durability. Those
+The dedicated fault executable makes 108 checks. A restrictive process
+mask removes every requested creation bit, then the explicit `fchmod`
+restores mode `0600` and the resulting checkpoint loads. Replacement
+preserves all mode bits, UID, GID, a named access ACL, an empty xattr,
+and a binary xattr. Indirect entries, FIFOs, and directories are
+rejected.
+
+Its linker-wrapped pre-commit failures cover directory-sync probing,
+payload flush, file sync and close, owner, mode, ACL, xattr, metadata
+reread, and rename. Each reports `MODEL_SAVE_NOT_COMMITTED` and leaves
+the old destination bytes. Final directory-sync and directory-close
+failures occur after rename, leave a loadable new checkpoint, and
+report `MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED`.
+
+A temporary-name swap after stream close proves that the retained
+identity descriptor prevents commit and that cleanup leaves the foreign
+replacement alone. A registry-count mismatch also fails before commit.
+On load, one fixture changes the source path after the bounded snapshot
+and still parses the checked bytes. A forced `fmemopen` failure
+publishes neither model nor tokenizer.
+
+One final fixture freezes the writer result from before this refactor.
+It uses `V=T=C=H=L=B=1`, fills its 20 parameter scalars with a fixed
+sequence, and requires a 121-byte file:
+
+```text
+fixed fields       40 bytes
+alphabet            1 byte
+20 parameter f32s  80 bytes
+                  ---------
+                   121 bytes
+```
+
+On the reference little-endian IEEE binary32 representation, a 64-bit
+FNV-1a fingerprint of all 121 bytes must equal
+`0xdf6959f32448a235`, the value recorded from commit `af73d2d`. This is
+a regression witness that the new transaction machinery preserved the
+pre-refactor TAGC v1 writer result on that platform.
+
+The witnesses do not cause an actual process crash or power loss. They
+do not prove CRC collision resistance, authentication, behavior on an
+undocumented filesystem, or preservation of privileged security
+attributes unavailable to the test user. They do not support a writer
+with the same authority concurrently changing the destination or its
+directory. The golden writer check is skipped on another native integer
+order or float representation. Its fingerprint can collide, does not
+make the native format portable, and is not authentication. Those
 limits are part of the promise, not footnotes outside it.
 
-Both witnesses build corrupt fixtures with a copy of the production CRC
-loop. Neither pins the named CRC variant with an independent
-known-answer test. The worked values in this chapter were checked
-independently; the executables themselves do not make that comparison.
+The focused and broader integration witnesses build corrupt fixtures
+with a copy of the production CRC loop. The golden writer fingerprint
+also covers the stored CRC word, but no executable isolates the named
+CRC variant with an independent standard known-answer input. The worked
+CRC values in this chapter were checked independently.
 
 ## Build checkpoint: make the handoff complete
 
 **Build.** Implement `checkpoint.c`. Begin with the format constants
 and the source-exact CRC32 update. Add the bounded prefix pass, checksum
-append, and checksum-first load gate. Reuse Chapter 3's tokenizer
-serializer, Chapter 9's canonical parameter registry, and Chapter 10's
-checked memory report.
+append, and immutable checksum-first load snapshot. Reuse Chapter 3's
+tokenizer serializer, Chapter 9's canonical parameter registry, and
+Chapter 10's checked memory report. Count the snapshot and model
+together under the resident ceiling.
 
-Implement save as adjacent temporary creation, optional existing
-read/write/execute bit propagation, header and payload writes, checksum
-append, file synchronization, close, and rename. Implement load as the
-ordered gates above. Keep candidate tokenizer and model ownership
-inside the loader until every check passes. Do not serialize gradients,
-optimizer moments, arenas, or cached forward state.
+Implement save around one opened parent directory. Accept an absent or
+regular destination, create an exclusive random neighbor, and preserve
+UID, GID, `07777` mode bits, the libacl access ACL, and managed xattrs
+when replacing. Reject unsupported attribute models before rename.
+Write TAGC v1, apply and verify metadata, synchronize and close the
+temporary file, recheck the destination, rename, then synchronize and
+close the parent directory.
+
+Return the three commit states without attempting post-rename rollback.
+Keep candidate tokenizer and model ownership inside the loader until
+every check passes. Do not serialize gradients, optimizer moments,
+arenas, or cached forward state.
 
 **Verify.**
 
@@ -1177,7 +1496,7 @@ make -C labs WORK=../src check-13
 **Expected.**
 
 ```text
-check-13: all 18 checkpoint checks passed
+check-13: all 21 checkpoint checks passed
 ```
 
 The focused result means the exact claims in the preceding witness
@@ -1193,12 +1512,19 @@ section, not every property of atomic replacement or persistence.
 - **A recomputed bad version loads:** CRC integrity does not replace
   magic and version validation.
 - **A small file asks for a giant arena:** apply the Chapter 10 memory
-  report before `model_new`, not only the parameter-file count.
+  report before `model_new`, and count its bounded snapshot in the same
+  resident ceiling.
 - **Weights load into the wrong objects:** writer and reader must walk
   the same Chapter 9 registry order. The tied head has no second copy.
 - **A failed save damages the old destination:** never open the
-  destination for the new payload. Write and synchronize beside it,
-  close, then rename.
+  destination for the new payload. Work relative to one opened parent,
+  write and synchronize beside it, close, then rename.
+- **Replacement drops access rules:** capture and verify UID, GID, all
+  `07777` mode bits, the libacl access ACL, and complete managed xattrs
+  before commit.
+- **A directory-sync failure says nothing was written:** rename already
+  published the new file. Return
+  `MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED`.
 - **A failed load leaves a tokenizer pointer:** set `*tk = NULL` at
   entry and publish ownership only after the final gate.
 - **Loaded training immediately diverges:** version 1 restores learned

@@ -33,9 +33,10 @@ else is assumed: the C idioms, the math, and machine learning itself
 are each taught the first time they appear. The full contract is in
 [Chapter 0](00-introduction.md#who-this-is-for).
 
-The reference environment is GNU/Linux with a C11 compiler and `libm`.
-OpenMP is optional. The default model uses about 380 MiB while training.
-The first-light model later in the book is deliberately much smaller.
+The reference environment is GNU/Linux with a C11 compiler, `libm`, and
+the libacl development headers and library. OpenMP is optional. The
+default model uses about 380 MiB while training. The first-light model
+later in the book is deliberately much smaller.
 
 ## Two ways through
 
@@ -131,7 +132,7 @@ answer for itself.
 | 10 | [Memory Planning and Arenas](10-memory-planning.md) | checked byte estimates, two-pass placement, lifetimes, and short views |
 | 11 | [Wiring the Model Forward](11-wiring-the-model-forward.md) | exact block and stack wiring, latest-call state, inference, and the tied head |
 | 12 | [Wiring the Model Backward](12-wiring-the-model-backward.md) | reverse stack order, residual and tied-gradient meetings, and bounded evidence |
-| 13 | [Durable Checkpoints](13-durable-checkpoints.md) | TAGC layout, CRC32, resource bounds, atomic replacement, and rejection gates |
+| 13 | [Durable Checkpoints](13-durable-checkpoints.md) | TAGC layout, immutable loads, resource bounds, metadata-preserving replacement, and durability |
 | 14 | [The Command Line](14-the-command-line.md) | help, version, parsing, diagnostics, streams, and setup boundaries |
 | 15 | [The Training Loop](15-the-training-loop.md) | batch, zero, forward, backward, update, evaluate, save, repeat |
 | 16 | [Sampling](16-sampling.md) | newest-logit selection, temperature, finite weighted draws, fresh context, and replay |

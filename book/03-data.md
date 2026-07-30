@@ -641,7 +641,7 @@ and rebuilds both tables in ascending order.
 They are 3 and newline. The ordered fields have made a complete numeric
 round trip without changing any id.
 
-Here are the complete serialization functions:
+Here is the complete writer:
 
 ```c
 int tokenizer_write(const Tokenizer *tk, FILE *stream)
@@ -652,59 +652,104 @@ int tokenizer_write(const Tokenizer *tk, FILE *stream)
         return -1;
     return 0;
 }
+```
+
+It first stores the vocabulary count as a 32-bit integer. It then calls
+`fwrite` with the address of the id-to-byte table, an item size of one
+byte, and exactly `vocab_size` items. Either failed write returns `-1`.
+
+The reader separates four jobs. First it reads and checks the count:
+
+```c
+static int read_vocabulary_size(FILE *stream, int32_t *vocab_size)
+{
+    if (read_i32(stream, vocab_size) != 0)
+        return -1;
+    if (*vocab_size < 1 || *vocab_size > BYTE_VALUES)
+        return -1;
+    return 0;
+}
+```
+
+Then it reads that many bytes:
+
+```c
+static int read_vocabulary_bytes(FILE *stream, char bytes[BYTE_VALUES],
+                                 int32_t vocab_size)
+{
+    return fread(bytes, 1, (size_t)vocab_size, stream)
+               == (size_t)vocab_size
+        ? 0 : -1;
+}
+```
+
+The next helper checks the serialized id order:
+
+```c
+static int vocabulary_is_canonical(const char bytes[BYTE_VALUES],
+                                   int32_t vocab_size)
+{
+    for (int32_t i = 1; i < vocab_size; i++) {
+        /* Weight rows use this serialized id order.  The writer emits
+         * ascending bytes, so accepting any other order would silently
+         * attach the loaded weights to different characters. */
+        if ((unsigned char)bytes[i - 1] >= (unsigned char)bytes[i])
+            return 0;
+    }
+    return 1;
+}
+```
+
+For each adjacent pair, the unsigned casts compare byte values from 0
+through 255. `>=` rejects both descending order and duplicate
+neighbors. Starting the loop at id 1 means both compared indexes exist.
+
+Only a canonical array reaches reconstruction:
+
+```c
+static Tokenizer *from_canonical_vocabulary(const char bytes[BYTE_VALUES],
+                                            int32_t vocab_size)
+{
+    int seen[BYTE_VALUES] = { 0 };
+
+    for (int32_t i = 0; i < vocab_size; i++)
+        seen[(unsigned char)bytes[i]] = 1;
+    return from_seen_bytes(seen);
+}
+```
+
+Each byte is marked in `seen`, and `from_seen_bytes` rebuilds both
+lookup tables. The strict adjacent comparison has already proved that
+the bytes are unique. No second duplicate check is needed after
+construction.
+
+The public reader is now the ordered list of those jobs:
+
+```c
 
 Tokenizer *tokenizer_read(FILE *stream)
 {
     int32_t vocab_size;
 
-    if (read_i32(stream, &vocab_size) != 0)
-        return NULL;
-    if (vocab_size < 1 || vocab_size > BYTE_VALUES)
+    if (read_vocabulary_size(stream, &vocab_size) != 0)
         return NULL;
 
     char bytes[BYTE_VALUES];
 
-    if (fread(bytes, 1, (size_t)vocab_size, stream) != (size_t)vocab_size)
+    if (read_vocabulary_bytes(stream, bytes, vocab_size) != 0)
         return NULL;
-
-    int seen[BYTE_VALUES] = { 0 };
-
-    for (int32_t i = 0; i < vocab_size; i++) {
-        /* Weight rows use this serialized id order.  The writer emits
-         * ascending bytes, so accepting any other order would silently
-         * attach the loaded weights to different characters. */
-        if (i > 0 && (unsigned char)bytes[i - 1] >= (unsigned char)bytes[i])
-            return NULL;
-        seen[(unsigned char)bytes[i]] = 1;
-    }
-
-    Tokenizer *tk = from_seen_bytes(seen);
-
-    if (tk->vocab_size != vocab_size) {   /* duplicate bytes: corrupt file */
-        tokenizer_free(tk);
+    if (!vocabulary_is_canonical(bytes, vocab_size))
         return NULL;
-    }
-    return tk;
+    return from_canonical_vocabulary(bytes, vocab_size);
 }
 ```
 
-Both signatures use the `FILE *` stream from Chapter 2. The writer
-first stores the vocabulary count as a 32-bit integer. It then calls
-`fwrite` with the address of the id-to-byte table, an item size of one
-byte, and exactly `vocab_size` items. Either failed write returns `-1`.
-
-The reader reverses those steps. It rejects a missing count, a count
-below 1 or above 256, and a short byte read. For each adjacent pair,
-the unsigned casts compare byte values from 0 through 255. `>=` rejects
-both descending order and duplicate neighbors.
-
-Each accepted byte is marked in `seen`, and `from_seen_bytes` rebuilds
-both lookup tables. The strict adjacent comparison has already rejected
-duplicates. The final size check is a redundant reconstruction
-consistency guard. Every malformed or short-stream rejection returns
-`NULL` instead of handing the caller a partly valid mapping. If
-allocation inside `from_seen_bytes` fails, Chapter 2's `emalloc`
-contract terminates the process instead.
+Both public signatures use the `FILE *` stream from Chapter 2. The
+reader rejects a missing count, a count below 1 or above 256, a short
+byte read, and any noncanonical order. Every rejection returns `NULL`
+instead of handing the caller a partly valid mapping. If allocation
+inside `from_seen_bytes` fails, Chapter 2's `emalloc` contract
+terminates the process instead.
 
 There is one deliberate boundary. `tokenizer_new("", 0)` can construct
 an empty runtime tokenizer, but `tokenizer_read` rejects a serialized
@@ -1288,10 +1333,12 @@ library between a corpus byte and the integer copied into a batch.
 ## Build checkpoint: deal the flashcards
 
 **Build.** Implement the sorted byte vocabulary, encode and decode, and
-the canonical `tokenizer_write`/`tokenizer_read` round trip. Store one
-encoded sequence in `Dataset`, including the platform-aware source
-limit and the valid empty representation. Implement shifted windows
-with replacement. Do not bind a Dataset to one block size.
+the canonical `tokenizer_write`/`tokenizer_read` round trip. The reader
+must reject invalid counts, short bodies, duplicates, and descending
+unsigned byte values. Store one encoded sequence in `Dataset`,
+including the platform-aware source limit and the valid empty
+representation. Implement shifted windows with replacement. Do not
+bind a Dataset to one block size.
 
 The supplied `make validation-data` path performs the whole-scene split;
 inspect its reported counts rather than reimplementing the script in
@@ -1318,8 +1365,9 @@ the canonical hashes, derived split, bundled checkpoint, and recorded
 replay evidence.
 
 Encoding and then decoding vocabulary bytes preserves them.
-Serialization preserves the exact id-to-byte mapping and rejects a
-reordered mapping. `"abcd"` at block size three produces inputs
+Serialization preserves the exact id-to-byte mapping, accepts
+canonical values through byte 255, and rejects short, duplicate, or
+reordered mappings. `"abcd"` at block size three produces inputs
 `[0,1,2]` and targets `[1,2,3]`. Empty input constructs safely, while a
 source beyond the effective limit is rejected before multiplication.
 

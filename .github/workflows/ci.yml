@@ -34,6 +34,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install checkpoint metadata dependency
+        run: sudo apt-get update && sudo apt-get install -y libacl1-dev
       - name: Run the complete teaching suite
         run: make CC=${{ matrix.compiler }} OPENMP=${{ matrix.openmp }} check-all
 
@@ -44,5 +46,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install checkpoint metadata dependency
+        run: sudo apt-get update && sudo apt-get install -y libacl1-dev
       - name: Run instrumented core checks
         run: make CC=gcc check-sanitizers

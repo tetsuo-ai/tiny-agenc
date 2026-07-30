@@ -14,6 +14,7 @@
 #   make check-evidence verify the evidence manifest and recorded metrics
 #   make check-metadata verify release-version metadata stays synchronized
 #   make check-install stage and exercise the installed program and model
+#   make check-checkpoint exercise durable-save metadata and failure paths
 #   make check-sanitizers run core checks under AddressSanitizer and UBSan
 #   make check-ndebug compile and test the model with assertions disabled
 #   make corpus     clean the committed raw NIGHT GRID corpus without network access
@@ -35,7 +36,7 @@ OPENMP   ?= 1
 NATIVE   ?= 0
 OPTFLAGS ?= -O3 -ffast-math
 CFLAGS += -std=c11 $(OPTFLAGS) -Wall -Wextra -Werror
-LDLIBS += -lm
+LDLIBS += -lacl -lm
 PREFIX   ?= /usr/local
 BINDIR   ?= $(PREFIX)/bin
 DATADIR  ?= $(PREFIX)/share
@@ -92,6 +93,24 @@ $(BUILD)/sampling: $(BUILD)/sampling.o $(OBJ)
 $(BUILD)/model-invalid: $(BUILD)/model-invalid.o $(OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+CHECKPOINT_WRAP_FLAGS := \
+	-Wl,--wrap=acl_cmp \
+	-Wl,--wrap=acl_set_fd \
+	-Wl,--wrap=close \
+	-Wl,--wrap=fchmod \
+	-Wl,--wrap=fchown \
+	-Wl,--wrap=fclose \
+	-Wl,--wrap=fflush \
+	-Wl,--wrap=fmemopen \
+	-Wl,--wrap=fsetxattr \
+	-Wl,--wrap=fsync \
+	-Wl,--wrap=renameat \
+	-Wl,--wrap=renameat2
+
+$(BUILD)/checkpoint-failures: $(BUILD)/checkpoint-failures.o $(OBJ)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(CHECKPOINT_WRAP_FLAGS) \
+		-o $@ $^ $(LDLIBS)
+
 build/split-order: scripts/split-order.c src/rng.c src/util.c src/rng.h \
                    src/util.h $(BUILD_CONFIG)
 	mkdir -p build
@@ -117,6 +136,10 @@ $(BUILD)/sampling.o: tests/sampling.c $(HEADERS) $(BUILD_CONFIG) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc -c -o $@ $<
 
 $(BUILD)/model-invalid.o: tests/model_invalid.c $(HEADERS) $(BUILD_CONFIG) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc -c -o $@ $<
+
+$(BUILD)/checkpoint-failures.o: tests/checkpoint_failures.c $(HEADERS) \
+                                $(BUILD_CONFIG) | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc -c -o $@ $<
 
 $(BUILD):
@@ -151,7 +174,10 @@ check-gradient: $(BUILD)/gradcheck
 check-integration: $(BUILD)/integration
 	./$(BUILD)/integration
 
-check: check-gradient check-integration
+check: check-gradient check-integration check-checkpoint
+
+check-checkpoint: $(BUILD)/checkpoint-failures
+	./$(BUILD)/checkpoint-failures
 
 check-foundations: $(BUILD)/integration
 	./$(BUILD)/integration foundations
@@ -260,9 +286,10 @@ clean:
 
 .PHONY: tiny-agenc $(BUILD)/gradcheck $(BUILD)/integration $(BUILD)/overfit \
         $(BUILD)/bigram $(BUILD)/sampling $(BUILD)/model-invalid \
+        $(BUILD)/checkpoint-failures \
         build/split-order \
         check-gradient \
-        check-integration check check-foundations check-data check-mat \
+        check-integration check-checkpoint check check-foundations check-data check-mat \
         check-parallel \
         check-forward check-backward check-optimizer check-model \
         check-sampling check-cli \

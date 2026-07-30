@@ -103,10 +103,26 @@ void        model_sample(Model *m, Rng *rng, int *ids, int prompt_count,
 /* A checkpoint is magic + version + config + vocabulary + weights,
  * self-contained for sampling later.  `tk` must be the tokenizer whose
  * ids index the model's token table; the writer can verify its size but
- * cannot infer that semantic identity.  Save returns 0 on success.
- * Load returns NULL for I/O, format, or resource-policy failures;
- * allocation failure follows the project's fatal allocation policy. */
-int         model_save(const Model *m, const Tokenizer *tk, const char *path);
+ * cannot infer that semantic identity. */
+typedef enum {
+    MODEL_SAVE_DURABLE = 0,
+    MODEL_SAVE_NOT_COMMITTED,
+    MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED,
+} ModelSaveResult;
+
+/* The detailed save result distinguishes failure before replacement from
+ * failure to confirm the parent-directory update after replacement.  The
+ * caller must exclude concurrent changes to the destination or its
+ * directory by the same filesystem authority.  The compatibility wrapper
+ * returns 0 only for MODEL_SAVE_DURABLE; its nonzero result does not prove
+ * that replacement was avoided.  Call model_save_durable when that
+ * distinction matters.  Load returns NULL for I/O, format, or
+ * resource-policy failures; allocation failure follows the project's
+ * fatal allocation policy. */
+ModelSaveResult model_save_durable(const Model *m, const Tokenizer *tk,
+                                   const char *path);
+int             model_save(const Model *m, const Tokenizer *tk,
+                           const char *path);
 Model      *model_load(Tokenizer **tk, const char *path);
 
 void        model_free(Model *m);
