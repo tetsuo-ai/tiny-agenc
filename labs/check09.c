@@ -274,6 +274,55 @@ static void check_parameter_blueprint(void)
     model_free(model);
 }
 
+static void check_gaussian_spares_across_parameters(void)
+{
+    ModelConfig config = {
+        .vocab_size  = 3,
+        .block_size  = 1,
+        .d_model     = 1,
+        .head_count  = 1,
+        .layer_count = 1,
+        .batch_size  = 1,
+    };
+    static const unsigned long long SEED = 321;
+    static const float INIT_STDDEV = 0.02f;
+    Model *model = blueprint_model(config, SEED);
+    Rng *expected_rng = rng_new(SEED);
+    float residual_stddev =
+        INIT_STDDEV / sqrtf(2.0f * (float)config.layer_count);
+    Block *block = &model->blocks[0];
+
+    expect(model_config_valid(config),
+           "the odd-count Gaussian fixture has legal geometry");
+    expect_gaussian(model->token_table, config.vocab_size, config.d_model,
+                    INIT_STDDEV, expected_rng,
+                    "the odd token table pins three Gaussian draws");
+    expect_gaussian(model->position_table,
+                    config.block_size, config.d_model,
+                    INIT_STDDEV, expected_rng,
+                    "the position table consumes the token table spare");
+    expect_gaussian(block->qkv_weights,
+                    QKV_STREAMS * config.d_model, config.d_model,
+                    INIT_STDDEV, expected_rng,
+                    "the odd QKV tensor continues the Gaussian stream");
+    expect_gaussian(block->proj_weights,
+                    config.d_model, config.d_model,
+                    residual_stddev, expected_rng,
+                    "the projection consumes the QKV tensor spare");
+    expect_gaussian(block->up_weights,
+                    MODEL_MLP_WIDENING * config.d_model, config.d_model,
+                    INIT_STDDEV, expected_rng,
+                    "the MLP up tensor follows the projection draw");
+    expect_gaussian(block->down_weights,
+                    config.d_model,
+                    MODEL_MLP_WIDENING * config.d_model,
+                    residual_stddev, expected_rng,
+                    "the MLP down tensor continues the same stream");
+
+    rng_free(expected_rng);
+    model_free(model);
+}
+
 static void check_global_clipping(void)
 {
     ModelConfig config = {
@@ -403,6 +452,7 @@ int main(void)
 {
     check_geometry();
     check_parameter_blueprint();
+    check_gaussian_spares_across_parameters();
     check_global_clipping();
     check_update_rejection_and_overflow_fallback();
 

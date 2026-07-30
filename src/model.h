@@ -76,6 +76,7 @@ enum {
     (MODEL_MAX_CHECKPOINT_RESIDENT_BYTES / 4 + (size_t)4096)
 
 int model_config_valid(ModelConfig config);
+/* On failure, the caller's memory record is unchanged. */
 int model_memory_requirements(ModelConfig config, ModelMemory *memory);
 
 /* Construction does not return for an invalid or unrepresentable

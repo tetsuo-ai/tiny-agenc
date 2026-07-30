@@ -106,22 +106,64 @@ The second promise does not follow from the first. A list can contain
 every object once and still put position parameters before token
 parameters on one run and after them on another.
 
-The real constructor allocates enough pointer slots before filling
-them:
+The real source groups the list, its next slot, and the shared
+construction recipe in one private record. This contiguous excerpt is
+the top of `model_parameters.c`:
 
 ```c
-m->param_count =
-    MODEL_TENSORS_ELSEWHERE + MODEL_TENSORS_PER_BLOCK * cfg.layer_count;
-m->params = emalloc((size_t)m->param_count * sizeof *m->params);
+static const float INIT_STDDEV = 0.02f;
 
-int at = 0;
+typedef struct {
+    Model *model;
+    Rng   *rng;
+    int    at;
+    int    wide;
+    float  residual_stddev;
+} ParameterCursor;
+
+static ParameterCursor parameter_registry_create(Model *m, Rng *rng)
+{
+    ModelConfig cfg  = m->cfg;
+    int         wide = MODEL_MLP_WIDENING * cfg.d_model;
+    float residual_stddev =
+        INIT_STDDEV / sqrtf(2.0f * (float)cfg.layer_count);
+
+    m->param_count =
+        MODEL_TENSORS_ELSEWHERE + MODEL_TENSORS_PER_BLOCK * cfg.layer_count;
+    m->params = emalloc((size_t)m->param_count * sizeof *m->params);
+
+    ParameterCursor cursor = { m, rng, 0, wide, residual_stddev };
+
+    return cursor;
+}
+
+static void parameter_registry_add(ParameterCursor *cursor, Param **named,
+                                   Param *parameter)
+{
+    cursor->model->params[cursor->at++] = parameter;
+    *named = parameter;
+}
 ```
 
-These are exact lines from `model_create_parameters`. The constants
-say there are eight objects per block and four elsewhere. The cast to
-`size_t` uses Chapter 1's object-size type before the multiplication.
-`sizeof *m->params` asks for the size of one list entry, a `Param *`,
-without repeating its type. `at` begins at slot zero.
+`ParameterCursor` keeps the model, the one advancing `Rng`, the next
+registry slot, `4C`, and the residual initialization spread together.
+The initialization expressions are worked below. The registry count
+still uses eight objects per block and four elsewhere. The cast to
+`size_t` uses Chapter 1's object-size type before multiplication.
+`sizeof *m->params` asks for the size of one `Param *` list entry
+without repeating its type.
+
+The positional initializer gives `at` the third value, zero.
+`parameter_registry_add` stores one already-created pointer in that
+slot, advances the cursor, then stores the same pointer through
+`named`. A caller passes an address such as `&m->token_table`, so
+`Param **named` reaches the readable `Param *` field.
+
+The chained assignment above remains a valid way to construct the two
+aliases. The source gives their repeated work a name instead. It also
+keeps stateful Gaussian construction in a completed statement before
+the registry helper runs, a sequencing rule built in the
+[initialization section](#initialization-is-architecture).
 
 ## One block, all its learned tensors
 
@@ -372,86 +414,190 @@ added into the residual stream. Reading it as an exact promise about
 the later variance would require assumptions about equal scales and
 independence. Here it is the architecture's chosen starting rule.
 
-The constructor begins with these exact lines:
+`parameter_registry_create` applies that formula before any draw. Its
+local `cfg` is a copy of the public dimensions. `wide` computes `4C`
+once, and `sqrtf` performs the float square root in the residual
+formula. For the two-layer toy, `residual_stddev` is approximately
+`0.01`.
+
+The next stage creates registry slots zero and one. This is the
+complete helper:
 
 ```c
-static const float INIT_STDDEV = 0.02f;
-
-void model_create_parameters(Model *m, Rng *rng)
+static void create_embedding_parameters(ParameterCursor *cursor)
 {
-    ModelConfig cfg  = m->cfg;
-    int         wide = MODEL_MLP_WIDENING * cfg.d_model;
-    float residual_stddev =
-        INIT_STDDEV / sqrtf(2.0f * (float)cfg.layer_count);
-```
+    Model       *m   = cursor->model;
+    ModelConfig  cfg = m->cfg;
+    Param       *token_table;
+    Param       *position_table;
 
-`cfg` is a local copy of the public dimensions. `wide` computes `4C`
-once. `sqrtf` performs the float square root in the residual formula.
-For the two-layer toy, the stored float is approximately `0.01`.
+    token_table =
+        param_new_gaussian(cfg.vocab_size, cfg.d_model,
+                           INIT_STDDEV, cursor->rng);
+    parameter_registry_add(cursor, &m->token_table, token_table);
 
-The opening assignments fill registry slots zero and one:
-
-```c
-    m->token_table = m->params[at++] =
-        param_new_gaussian(cfg.vocab_size, cfg.d_model, INIT_STDDEV, rng);
-    m->position_table = m->params[at++] =
-        param_new_gaussian(cfg.block_size, cfg.d_model, INIT_STDDEV, rng);
-```
-
-The right side constructs a Gaussian `Param`. The middle assignment
-puts its address into the next registry slot. The left assignment puts
-the same address into the readable field. Both tables use spread
-`0.02`.
-
-The loop then performs all eight assignments for each block:
-
-```c
-    for (int layer = 0; layer < cfg.layer_count; layer++) {
-        Block *b = &m->blocks[layer];
-
-        b->norm1_gain = m->params[at++] =
-            param_new_constant(1, cfg.d_model, 1.0f);
-        b->norm1_bias = m->params[at++] =
-            param_new_constant(1, cfg.d_model, 0.0f);
-        b->qkv_weights = m->params[at++] =
-            param_new_gaussian(QKV_STREAMS * cfg.d_model, cfg.d_model,
-                               INIT_STDDEV, rng);
-        b->proj_weights = m->params[at++] =
-            param_new_gaussian(cfg.d_model, cfg.d_model,
-                               residual_stddev, rng);
-        b->norm2_gain = m->params[at++] =
-            param_new_constant(1, cfg.d_model, 1.0f);
-        b->norm2_bias = m->params[at++] =
-            param_new_constant(1, cfg.d_model, 0.0f);
-        b->up_weights = m->params[at++] =
-            param_new_gaussian(wide, cfg.d_model, INIT_STDDEV, rng);
-        b->down_weights = m->params[at++] =
-            param_new_gaussian(cfg.d_model, wide, residual_stddev, rng);
-    }
-```
-
-`&m->blocks[layer]` takes the address of the current block, and `b`
-keeps the eight field names shorter. The two gain rows start at one
-and the two bias rows start at zero. Those constant constructors do
-not draw from `rng`. QKV and MLP-up use `0.02`; projection and MLP-down
-use the residual spread. The loop repeats that exact order for every
-layer.
-
-The final two constant rows finish the registry:
-
-```c
-    m->final_gain = m->params[at++] =
-        param_new_constant(1, cfg.d_model, 1.0f);
-    m->final_bias = m->params[at++] =
-        param_new_constant(1, cfg.d_model, 0.0f);
-    assert(at == m->param_count);
+    position_table =
+        param_new_gaussian(cfg.block_size, cfg.d_model,
+                           INIT_STDDEV, cursor->rng);
+    parameter_registry_add(cursor, &m->position_table, position_table);
 }
 ```
 
-The assertion checks that construction consumed the promised number
-of slots. It cannot detect a swap, a duplicate pointer, or a wrong
-shape that leaves the count unchanged. The lab's identity-and-shape
-ledger checks those stronger promises.
+The first assignment finishes construction of the token table. The
+following call gives its pointer to the next registry slot and to
+`m->token_table`. Position construction begins only after both token
+writes are complete. Both tables use spread `0.02`.
+
+A shorter attempt could pass two constructors as arguments to one
+helper. This is an unsafe sketch, not repository source:
+
+```c
+register_pair(cursor,
+              param_new_gaussian(token_rows, channels, scale, rng),
+              param_new_gaussian(position_rows, channels, scale, rng));
+```
+
+C does not specify which function argument is evaluated first. A
+compiler may consume the position draws before the token draws. With
+the earlier `0.10`, `-0.30` stream, the two jobs can receive the
+opposite values.
+
+Each source constructor is therefore its own full statement. One
+statement's side effects finish before the next statement begins.
+Passing the completed pointer to `parameter_registry_add` cannot
+reorder the `Rng` calls. This is why the source does not fold several
+Gaussian constructors into one call, even though the resulting line
+count would be smaller.
+
+One block is divided at its real operation boundaries. The following
+contiguous excerpt contains every block-parameter helper:
+
+```c
+static void create_norm1_parameters(ParameterCursor *cursor, Block *block)
+{
+    ModelConfig cfg = cursor->model->cfg;
+    Param *norm1_gain;
+    Param *norm1_bias;
+
+    norm1_gain = param_new_constant(1, cfg.d_model, 1.0f);
+    parameter_registry_add(cursor, &block->norm1_gain, norm1_gain);
+
+    norm1_bias = param_new_constant(1, cfg.d_model, 0.0f);
+    parameter_registry_add(cursor, &block->norm1_bias, norm1_bias);
+}
+
+static void create_attention_parameters(ParameterCursor *cursor, Block *block)
+{
+    ModelConfig cfg = cursor->model->cfg;
+    Param *qkv_weights;
+    Param *proj_weights;
+
+    qkv_weights =
+        param_new_gaussian(QKV_STREAMS * cfg.d_model, cfg.d_model,
+                           INIT_STDDEV, cursor->rng);
+    parameter_registry_add(cursor, &block->qkv_weights, qkv_weights);
+
+    proj_weights =
+        param_new_gaussian(cfg.d_model, cfg.d_model,
+                           cursor->residual_stddev, cursor->rng);
+    parameter_registry_add(cursor, &block->proj_weights, proj_weights);
+}
+
+static void create_norm2_parameters(ParameterCursor *cursor, Block *block)
+{
+    ModelConfig cfg = cursor->model->cfg;
+    Param *norm2_gain;
+    Param *norm2_bias;
+
+    norm2_gain = param_new_constant(1, cfg.d_model, 1.0f);
+    parameter_registry_add(cursor, &block->norm2_gain, norm2_gain);
+
+    norm2_bias = param_new_constant(1, cfg.d_model, 0.0f);
+    parameter_registry_add(cursor, &block->norm2_bias, norm2_bias);
+}
+
+static void create_mlp_parameters(ParameterCursor *cursor, Block *block)
+{
+    ModelConfig cfg = cursor->model->cfg;
+    Param *up_weights;
+    Param *down_weights;
+
+    up_weights =
+        param_new_gaussian(cursor->wide, cfg.d_model,
+                           INIT_STDDEV, cursor->rng);
+    parameter_registry_add(cursor, &block->up_weights, up_weights);
+
+    down_weights =
+        param_new_gaussian(cfg.d_model, cursor->wide,
+                           cursor->residual_stddev, cursor->rng);
+    parameter_registry_add(cursor, &block->down_weights, down_weights);
+}
+
+static void create_block_parameters(ParameterCursor *cursor, Block *block)
+{
+    create_norm1_parameters(cursor, block);
+    create_attention_parameters(cursor, block);
+    create_norm2_parameters(cursor, block);
+    create_mlp_parameters(cursor, block);
+}
+
+static void create_all_block_parameters(ParameterCursor *cursor)
+{
+    Model *m = cursor->model;
+
+    for (int layer = 0; layer < m->cfg.layer_count; layer++)
+        create_block_parameters(cursor, &m->blocks[layer]);
+}
+```
+
+`create_norm1_parameters` writes gain then bias. The constants start
+at one and zero and consume no random draws.
+`create_attention_parameters` follows with QKV at spread `0.02`, then
+projection at the residual spread. Norm2 writes its gain and bias
+before `create_mlp_parameters` writes MLP-up at `0.02` and MLP-down at
+the residual spread.
+
+`create_block_parameters` makes the eight-entry order readable from
+four calls. `create_all_block_parameters` keeps the layer loop in one
+place and passes each block address to that same sequence. The
+Gaussian constructor statements remain separate inside attention and
+MLP sections, so moving function boundaries did not move a draw.
+
+The final helper and public coordinator are contiguous at the end of
+the file:
+
+```c
+static void create_final_parameters(ParameterCursor *cursor)
+{
+    Model       *m   = cursor->model;
+    ModelConfig  cfg = m->cfg;
+    Param       *final_gain;
+    Param       *final_bias;
+
+    final_gain = param_new_constant(1, cfg.d_model, 1.0f);
+    parameter_registry_add(cursor, &m->final_gain, final_gain);
+
+    final_bias = param_new_constant(1, cfg.d_model, 0.0f);
+    parameter_registry_add(cursor, &m->final_bias, final_bias);
+}
+
+void model_create_parameters(Model *m, Rng *rng)
+{
+    ParameterCursor cursor = parameter_registry_create(m, rng);
+
+    create_embedding_parameters(&cursor);
+    create_all_block_parameters(&cursor);
+    create_final_parameters(&cursor);
+    assert(cursor.at == m->param_count);
+}
+```
+
+The coordinator opens the registry, fills embeddings, visits every
+block, and finishes with the two constant rows. The assertion checks
+that construction consumed the promised number of slots. It cannot
+detect a swap, duplicate pointer, or wrong shape that leaves the count
+unchanged. The lab's identity-and-shape ledger checks those stronger
+promises.
 
 The seed enters once. Gaussian construction advances one `Rng` in
 canonical order:
@@ -472,12 +618,32 @@ number of draws, later objects can resume at the same stream position.
 The `Rng` and its saved Box-Muller result still persist across
 constructor calls; the stream does not restart per `Param`. If a
 Gaussian matrix consumes an odd number of results, its saved partner
-becomes the next matrix's first result. Every Gaussian matrix in the
-lab's toy and showcase geometries has an even scalar count, so that
-particular boundary case is not exercised there. The witness does
-replay the full initialization stream bit for bit within the same
-build. It checks that the same seed reproduces every initialized
-parameter value and a different seed changes the parameter values.
+becomes the next matrix's first result.
+
+The two-block toy and showcase use even Gaussian counts. The lab adds
+one legal boundary fixture:
+
+```text
+V = 3, T = 1, C = 1, H = 1, L = 1, B = 1
+
+token table       3 results -> leaves one Box-Muller spare
+position table    1 result  -> consumes that spare
+QKV weights       3 results -> leaves the next spare
+projection        1 result  -> consumes that spare
+MLP up             4 results
+MLP down           4 results
+```
+
+One expected `Rng` replays those six matrices without restarting.
+The token table's third result banks a partner; the position table
+must receive that partner as its only value. QKV and projection repeat
+the same odd-then-one boundary. Reordering a Gaussian constructor, or
+putting several constructors in one argument list so their evaluation
+can swap, changes the compared bits.
+
+Those six stream checks plus one legal-geometry check make seven new
+witnesses. The existing toy still checks every registry identity and
+shape, same-seed replay, and different-seed change.
 
 ## Why the private blueprint must be exact
 
@@ -884,10 +1050,11 @@ performs the checked byte calculation and completes `model_new`.
 **Build.** Use the supplied `model_internal.h` without changing one
 byte. Implement configuration validation and the shared accessors in
 `model.c`. In `model_parameters.c`, allocate the pointer registry and
-construct every `Param` with one shared `at` cursor in the exact order
-walked above. Implement model-wide gradient clearing, clipping,
-stepping, counting, and teardown. Do not place temporary storage or
-wire forward and backward yet.
+construct every `Param` through one `ParameterCursor` in the exact
+order walked above. Keep each Gaussian constructor in its own full
+statement before registering its pointer. Implement model-wide
+gradient clearing, clipping, stepping, counting, and teardown. Do not
+place temporary storage or wire forward and backward yet.
 
 **Verify.**
 
@@ -897,16 +1064,18 @@ make -C labs check-09
 ```
 
 **Expected.** `check-blueprint` first reports that the shared private
-layout is exact. The Chapter 9 witness then reports 60 model-contract
+layout is exact. The Chapter 9 witness then reports 67 model-contract
 checks. On its two-block toy, it verifies 20 registry entries, every
 named-pointer identity and shape, and the exact seeded initialization
 stream. Those checked shapes imply the 456 learned scalars calculated
 in the chapter. On its showcase parameter geometry, it directly checks
-36 objects and 815,360 learned scalars. The ordinary clipping witness
-turns `(3, 4)` into approximately `(0.6, 0.8)`. The large finite
-witness exercises the elementwise double-rescan fallback within
-tolerance. An invalid recipe leaves the `(3, 4)` gradient unclipped,
-and an infinite gradient is rejected.
+36 objects and 815,360 learned scalars. Its one-channel fixture checks
+the Box-Muller spare across odd token-to-position and QKV-to-projection
+boundaries. The ordinary clipping witness turns `(3, 4)` into
+approximately `(0.6, 0.8)`. The large finite witness exercises the
+elementwise double-rescan fallback within tolerance. An invalid recipe
+leaves the `(3, 4)` gradient unclipped, and an infinite gradient is
+rejected.
 
 The witness does not exercise the tied head's complete forward and
 backward routes, temporary-storage placement, or
@@ -918,10 +1087,14 @@ checks establish the configuration boundary.
 
 - A correct scalar total with a wrong named pointer means count was
   mistaken for identity and order.
-- A missing or duplicated update means named fields and the registry
-  were filled in separate statements.
+- A missing or duplicated update means a constructed pointer was not
+  passed exactly once to `parameter_registry_add`, or the wrong named
+  field address was passed.
 - A seeded replay mismatch often means Gaussian constructors moved out
-  of canonical order or a constant constructor consumed RNG draws.
+  of canonical order, multiple constructors shared one argument list,
+  or a constant constructor consumed RNG draws.
+- A mismatch only at an odd-count boundary often means the Box-Muller
+  spare was discarded between parameter constructors.
 - Projection or MLP-down values at spread `0.02` missed the smaller
   residual scale.
 - A separate output table turned one tied object into two untied

@@ -221,10 +221,87 @@ Their SHA-256 values were
 and
 `0fc63e99d7eb837b2f3010e1942f43fc6bee33cd1496ed82f9220e639dec81ba`.
 
-The current source aggregate after that refactor is:
+The source aggregate after that numerical refactor was:
 
 ```text
 b7620842985e2b00756ab5948f65592e088243080a255b63f5fb6e6ea368ff2b
+```
+
+The model-construction refactor was compared directly with merged
+commit `a5b6979`. Both trees were built on x86-64 Ubuntu 24.04 with GCC
+13.3.0, OpenMP disabled, and the default `-O3 -ffast-math` flags. The
+baseline checkout used:
+
+```sh
+make OPENMP=0
+./tiny-agenc train \
+    --data labs/tiny-corpus.txt \
+    --out /tmp/tiny-agenc-pr3-baseline-a5b6979-step1.bin \
+    --steps 1 --layers 1 --heads 1 --width 8 \
+    --block 8 --batch 1 --seed 1337 \
+    > /tmp/tiny-agenc-pr3-baseline-a5b6979-step1.log 2>&1
+./tiny-agenc train \
+    --data labs/tiny-corpus.txt \
+    --out /tmp/tiny-agenc-pr3-baseline-a5b6979-step50.bin \
+    --steps 50 --layers 1 --heads 1 --width 8 \
+    --block 8 --batch 1 --seed 1337 \
+    > /tmp/tiny-agenc-pr3-baseline-a5b6979-step50.log 2>&1
+./tiny-agenc sample \
+    --model /tmp/tiny-agenc-pr3-baseline-a5b6979-step50.bin \
+    --prompt 'RAZR:' --length 24 --temperature 0.8 --seed 1337 \
+    > /tmp/tiny-agenc-pr3-baseline-a5b6979.sample \
+    2> /tmp/tiny-agenc-pr3-baseline-a5b6979.sample.err
+```
+
+The refactored checkout used:
+
+```sh
+make OPENMP=0
+./tiny-agenc train \
+    --data labs/tiny-corpus.txt \
+    --out /tmp/tiny-agenc-pr3-current-step1.bin \
+    --steps 1 --layers 1 --heads 1 --width 8 \
+    --block 8 --batch 1 --seed 1337 \
+    > /tmp/tiny-agenc-pr3-current-step1.log 2>&1
+./tiny-agenc train \
+    --data labs/tiny-corpus.txt \
+    --out /tmp/tiny-agenc-pr3-current-step50.bin \
+    --steps 50 --layers 1 --heads 1 --width 8 \
+    --block 8 --batch 1 --seed 1337 \
+    > /tmp/tiny-agenc-pr3-current-step50.log 2>&1
+./tiny-agenc sample \
+    --model /tmp/tiny-agenc-pr3-current-step50.bin \
+    --prompt 'RAZR:' --length 24 --temperature 0.8 --seed 1337 \
+    > /tmp/tiny-agenc-pr3-current.sample \
+    2> /tmp/tiny-agenc-pr3-current.sample.err
+cmp /tmp/tiny-agenc-pr3-baseline-a5b6979-step1.bin \
+    /tmp/tiny-agenc-pr3-current-step1.bin
+cmp /tmp/tiny-agenc-pr3-baseline-a5b6979-step50.bin \
+    /tmp/tiny-agenc-pr3-current-step50.bin
+cmp /tmp/tiny-agenc-pr3-baseline-a5b6979.sample \
+    /tmp/tiny-agenc-pr3-current.sample
+cmp /tmp/tiny-agenc-pr3-baseline-a5b6979.sample.err \
+    /tmp/tiny-agenc-pr3-current.sample.err
+sha256sum /tmp/tiny-agenc-pr3-current-step1.bin \
+    /tmp/tiny-agenc-pr3-current-step50.bin \
+    /tmp/tiny-agenc-pr3-current.sample \
+    /tmp/tiny-agenc-pr3-current.sample.err
+```
+
+The one-step checkpoints shared SHA-256
+`dd647b63ce090c2bb28e42f52a6431b07e295a7bbcb86d61c805f993c39d101d`.
+The 50-step checkpoints shared
+`4adcaab12765e7d2b0802851a2bbb64c723c90263dea725c2f5cbe7d0f1627e7`.
+Sampling standard output and diagnostics were also byte-identical, with
+SHA-256 values
+`9e77d01c4baa58e2480be73defca3f0bd94f6c66892c266c009aa5ce621629d3`
+and
+`0fc63e99d7eb837b2f3010e1942f43fc6bee33cd1496ed82f9220e639dec81ba`.
+
+The current source aggregate after that refactor is:
+
+```text
+2669c634617917a4099e67721e2c7eb5491058b6a49ee7b653963df05d349df0
 ```
 
 ## Full-corpus showcase

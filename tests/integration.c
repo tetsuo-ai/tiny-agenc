@@ -656,6 +656,20 @@ static ModelConfig tiny_config(void)
     return cfg;
 }
 
+static ModelConfig maximum_config(void)
+{
+    ModelConfig cfg = {
+        .vocab_size  = MODEL_MAX_VOCAB_SIZE,
+        .block_size  = MODEL_MAX_BLOCK_SIZE,
+        .d_model     = MODEL_MAX_D_MODEL,
+        .head_count  = MODEL_MAX_HEAD_COUNT,
+        .layer_count = MODEL_MAX_LAYER_COUNT,
+        .batch_size  = MODEL_MAX_TOKENS_PER_PASS / MODEL_MAX_BLOCK_SIZE,
+    };
+
+    return cfg;
+}
+
 static size_t architecture_parameter_count(ModelConfig cfg)
 {
     size_t width = (size_t)cfg.d_model;
@@ -667,11 +681,28 @@ static size_t architecture_parameter_count(ModelConfig cfg)
 
 static int models_equal(const Model *first, const Model *second);
 
-static void check_model_contract(void)
+static int memory_reports_equal(ModelMemory first, ModelMemory second)
 {
-    ModelConfig cfg = tiny_config();
+    return first.parameter_bytes == second.parameter_bytes
+        && first.activation_bytes == second.activation_bytes
+        && first.gradient_bytes == second.gradient_bytes
+        && first.token_bytes == second.token_bytes
+        && first.total_bytes == second.total_bytes;
+}
 
+static void check_model_config_contract(ModelConfig cfg)
+{
     expect(model_config_valid(cfg), "representative model config is valid");
+
+    ModelConfig minimum = {
+        .vocab_size  = 1,
+        .block_size  = 1,
+        .d_model     = 1,
+        .head_count  = 1,
+        .layer_count = 1,
+        .batch_size  = 1,
+    };
+    expect(model_config_valid(minimum), "model dimension minima are inclusive");
 
     ModelConfig invalid = cfg;
     invalid.vocab_size = 0;
@@ -686,23 +717,55 @@ static void check_model_contract(void)
     expect(!model_config_valid(invalid), "model width must divide into heads");
 
     invalid = cfg;
+    invalid.d_model = 0;
+    expect(!model_config_valid(invalid), "model rejects an empty width");
+
+    invalid = cfg;
+    invalid.head_count = 0;
+    expect(!model_config_valid(invalid), "model rejects an empty head count");
+
+    invalid = cfg;
     invalid.layer_count = 0;
     expect(!model_config_valid(invalid), "model needs at least one layer");
 
     invalid = cfg;
-    invalid.batch_size = MODEL_MAX_TOKENS_PER_PASS;
-    expect(!model_config_valid(invalid), "model caps tokens in one pass");
+    invalid.batch_size = 0;
+    expect(!model_config_valid(invalid), "model rejects an empty batch");
 
-    ModelConfig boundary = {
-        .vocab_size  = MODEL_MAX_VOCAB_SIZE,
-        .block_size  = MODEL_MAX_BLOCK_SIZE,
-        .d_model     = MODEL_MAX_D_MODEL,
-        .head_count  = MODEL_MAX_HEAD_COUNT,
-        .layer_count = MODEL_MAX_LAYER_COUNT,
-        .batch_size  = MODEL_MAX_TOKENS_PER_PASS / MODEL_MAX_BLOCK_SIZE,
-    };
+    ModelConfig boundary = maximum_config();
+
     expect(model_config_valid(boundary), "documented model limits are inclusive");
 
+    invalid = boundary;
+    invalid.vocab_size = MODEL_MAX_VOCAB_SIZE + 1;
+    expect(!model_config_valid(invalid), "model rejects vocabulary above its limit");
+
+    invalid = boundary;
+    invalid.block_size = MODEL_MAX_BLOCK_SIZE + 1;
+    invalid.batch_size = 1;
+    expect(!model_config_valid(invalid), "model rejects context above its limit");
+
+    invalid = boundary;
+    invalid.d_model = MODEL_MAX_D_MODEL + 1;
+    invalid.head_count = 1;
+    expect(!model_config_valid(invalid), "model rejects width above its limit");
+
+    invalid = boundary;
+    invalid.head_count = MODEL_MAX_HEAD_COUNT + 1;
+    invalid.d_model = MODEL_MAX_HEAD_COUNT + 1;
+    expect(!model_config_valid(invalid), "model rejects heads above their limit");
+
+    invalid = boundary;
+    invalid.layer_count = MODEL_MAX_LAYER_COUNT + 1;
+    expect(!model_config_valid(invalid), "model rejects layers above their limit");
+
+    invalid = boundary;
+    invalid.batch_size++;
+    expect(!model_config_valid(invalid), "model caps tokens in one pass");
+}
+
+static void check_model_memory_contract(void)
+{
     ModelConfig showcase = {
         .vocab_size  = 80,
         .block_size  = 128,
@@ -720,17 +783,40 @@ static void check_model_contract(void)
 
     expect(model_memory_requirements(showcase, &showcase_memory),
            "showcase memory requirements are computable");
-    expect(showcase_memory.parameter_bytes > 0
-           && showcase_memory.activation_bytes > 0
-           && showcase_memory.gradient_bytes > 0
-           && showcase_memory.token_bytes > 0,
-           "model memory report names every owned buffer family");
-    expect(showcase_memory.total_bytes
-           == showcase_memory.parameter_bytes
-            + showcase_memory.activation_bytes
-            + showcase_memory.gradient_bytes
-            + showcase_memory.token_bytes,
-           "model memory report totals its buffer families exactly");
+    expect(showcase_memory.parameter_bytes == 13045760,
+           "showcase parameter storage is exact");
+    expect(showcase_memory.activation_bytes == 191660032,
+           "showcase value arena storage is exact");
+    expect(showcase_memory.gradient_bytes == 190054400,
+           "showcase gradient arena storage is exact");
+    expect(showcase_memory.token_bytes == 32768,
+           "showcase token cache storage is exact");
+    expect(showcase_memory.total_bytes == 394792960,
+           "showcase total storage is exact");
+
+    ModelMemory maximum_memory;
+
+    expect(model_memory_requirements(maximum_config(), &maximum_memory)
+           && maximum_memory.total_bytes
+              > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES,
+           "maximum valid geometry has a representable memory report");
+
+    ModelMemory sentinel = {
+        .parameter_bytes  = 11,
+        .activation_bytes = 22,
+        .gradient_bytes   = 33,
+        .token_bytes      = 44,
+        .total_bytes      = 55,
+    };
+    ModelMemory unchanged = sentinel;
+    ModelConfig invalid = showcase;
+
+    invalid.vocab_size = 0;
+    expect(!model_memory_requirements(invalid, &unchanged)
+           && memory_reports_equal(unchanged, sentinel),
+           "failed memory report leaves caller storage unchanged");
+    expect(!model_memory_requirements(showcase, NULL),
+           "memory report rejects a missing output record");
 
     ModelConfig resource_bomb = {
         .vocab_size  = 1,
@@ -747,7 +833,10 @@ static void check_model_contract(void)
     expect(model_memory_requirements(resource_bomb, &bomb_memory)
            && bomb_memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES,
            "checkpoint memory preflight identifies an oversized arena");
+}
 
+static void check_constructed_model_contract(ModelConfig cfg)
+{
     expect(param_new_constant(0, 1, 0.0f) == NULL,
            "Param rejects a non-positive shape");
     expect(param_new_constant(INT_MAX, INT_MAX, 0.0f) == NULL,
@@ -759,6 +848,14 @@ static void check_model_contract(void)
 
     expect(model_parameter_count(m) == architecture_parameter_count(cfg),
            "model parameter count matches the architecture formula");
+
+    ModelMemory memory;
+
+    expect(model_memory_requirements(cfg, &memory),
+           "constructed model memory requirements are computable");
+    expect(memory.parameter_bytes
+           == model_parameter_count(m) * 4 * sizeof(float),
+           "parameter storage formula matches the constructed model");
 
     static const int EXPECTED_ROWS[] = { 4, 4, 1, 1, 24, 8, 1, 1, 32, 8, 1, 1 };
     static const int EXPECTED_COLS[] = { 8, 8, 8, 8,  8, 8, 8, 8,  8, 32, 8, 8 };
@@ -774,6 +871,15 @@ static void check_model_contract(void)
         }
     }
     model_free(m);
+}
+
+static void check_model_contract(void)
+{
+    ModelConfig cfg = tiny_config();
+
+    check_model_config_contract(cfg);
+    check_model_memory_contract();
+    check_constructed_model_contract(cfg);
 }
 
 static void check_optimizer_integration(void)

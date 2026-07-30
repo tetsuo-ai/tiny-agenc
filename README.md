@@ -3,7 +3,7 @@
 A character-level autoregressive transformer with multi-head causal
 self-attention, layernorm, GELU, residual streams, AdamW, and
 hand-written backpropagation. It trains from scratch on a CPU in about
-3,900 lines of C11 implementation code, excluding headers and tests,
+4,200 lines of C11 implementation code, excluding headers and tests,
 with no machine-learning framework or tensor library.
 Run it and watch noise become language in your terminal.
 
