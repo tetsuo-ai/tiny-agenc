@@ -59,40 +59,39 @@ static const unsigned long long SAMPLE_SEED_OFFSET =
 
 The completed `run_train` keeps Chapter 14's checked setup and replaces
 the provisional direct save with two long-lived RNG handles and a call
-to `train_loop`:
+to `train_loop`. The final lines of the setup helper create those three
+owners:
 
 ```c
-Model *m          = model_new(options.cfg, options.seed);
-Rng   *batch_rng  = rng_new(options.seed);
-Rng   *sample_rng = rng_new(options.seed + SAMPLE_SEED_OFFSET);
-
-print_architecture(stdout, m);
-printf("tiny-agenc: %zu tokens of training data from %s\n",
-       dataset_token_count(ds), options.data_path);
-if (validation_ds != NULL)
-    printf("tiny-agenc: %zu tokens of validation data from %s\n",
-           dataset_token_count(validation_ds), options.validation_path);
-
-train_loop(m, tk, ds, validation_ds, batch_rng, sample_rng, &options);
-printf("tiny-agenc: checkpoint saved to %s\n", options.out_path);
-
-rng_free(sample_rng);
-rng_free(batch_rng);
-model_free(m);
-if (validation_ds != NULL)
-    dataset_free(validation_ds);
-dataset_free(ds);
-tokenizer_free(tk);
-return EXIT_SUCCESS;
+resources.model      = model_new(options->cfg, options->seed);
+resources.batch_rng  = rng_new(options->seed);
+resources.sample_rng = rng_new(options->seed + SAMPLE_SEED_OFFSET);
 ```
 
-This is the exact tail of [`run_train`](../src/main.c). `model_new`
+`run_train` itself only coordinates the named phases:
+
+```c
+static int run_train(TrainOptions options)
+{
+    reject_training_path_collisions(&options);
+
+    TrainingResources resources = prepare_training_resources(&options);
+
+    print_training_summary(&resources, &options);
+    train_loop(&resources, &options);
+    printf("tiny-agenc: checkpoint saved to %s\n", options.out_path);
+    free_training_resources(resources);
+    return EXIT_SUCCESS;
+}
+```
+
+This is the complete [`run_train`](../src/main.c). `model_new`
 temporarily creates and consumes its own Chapter 9
 [initialization generator](09-parameters-and-the-blueprint.md#initialization-is-architecture),
-then frees it. `batch_rng` is a different handle created later with the
-same numeric seed. The two handles begin from the same PCG state, so
-calling them statistically independent would be false. Their state is
-separate: Chapter 2's
+then frees it. `resources.batch_rng` is a different handle created
+later with the same numeric seed. The two handles begin from the same
+PCG state, so calling them statistically independent would be false.
+Their state is separate: Chapter 2's
 [seeded-handle rule](02-foundations.md#enter-the-sequence-through-a-seed)
 means draws made during construction cannot advance the later batch
 handle.
@@ -103,10 +102,23 @@ consume the next batch draw. Changing the one public seed still changes
 both initialization and batch selection; this CLI does not expose a way
 to vary those two jobs separately.
 
-The calls after `train_loop` are the old cleanup in its finished
-position. The loop returns only after the final checkpoint has been
-saved. The success line therefore says `checkpoint saved`, not
-`initialized checkpoint saved`.
+The loop returns only after the final checkpoint has been saved. The
+success line therefore says `checkpoint saved`, not `initialized
+checkpoint saved`. The final helper releases the six long-lived owners
+in their required order:
+
+```c
+static void free_training_resources(TrainingResources resources)
+{
+    rng_free(resources.sample_rng);
+    rng_free(resources.batch_rng);
+    model_free(resources.model);
+    if (resources.validation_data != NULL)
+        dataset_free(resources.validation_data);
+    dataset_free(resources.training_data);
+    tokenizer_free(resources.tokenizer);
+}
+```
 
 ## One cycle must close before another begins
 
@@ -212,25 +224,34 @@ That is not a summary hiding another system. It is the system.
 
 ## The complete learning step
 
-Here is the load-bearing center of `train_loop` in
-[`main.c`](../src/main.c), with reporting and saving removed. The
-excerpt is complete for one update:
+The update has its own helper in [`main.c`](../src/main.c). The function
+is complete:
 
 ```c
-dataset_batch(ds, batch_rng, inputs, targets,
-              options->cfg.batch_size, options->cfg.block_size);
-model_zero_gradients(m);
+static float run_training_step(TrainingResources *resources,
+                               TrainingStepState *state,
+                               const TrainOptions *options, int step)
+{
+    dataset_batch(resources->training_data, resources->batch_rng,
+                  state->inputs, state->targets,
+                  options->cfg.batch_size, options->cfg.block_size);
+    model_zero_gradients(resources->model);
 
-float loss = model_forward(m, inputs, targets,
-                           options->cfg.batch_size, options->cfg.block_size);
+    float loss =
+        model_forward(resources->model, state->inputs, state->targets,
+                      options->cfg.batch_size, options->cfg.block_size);
 
-model_backward(m);
-if (model_step(m, opt, step) != 0)
-    die("non-finite gradient or invalid optimizer update at step %d",
-        step);
+    model_backward(resources->model);
+    if (model_step(resources->model, state->optimizer, step) != 0)
+        die("non-finite gradient or invalid optimizer update at step %d",
+            step);
+    return loss;
+}
 ```
 
-Read the calls in order.
+`resources` supplies objects that live for the whole command. `state`
+supplies the batch buffers and optimizer recipe owned by the loop. Read
+the calls in order.
 
 `dataset_batch` fills `B*T` input ids and `B*T` target ids. Chapter 3's
 [window draw](03-data.md#draw-every-legal-start) samples each row with
@@ -279,21 +300,39 @@ inputs   needs 6 int slots
 targets  needs 6 int slots
 ```
 
-The source extends that count before the first iteration:
+The buffers and the optimizer recipe travel together through each
+update helper, so the source gives them one small record:
 
 ```c
-int    span    = options->cfg.batch_size * options->cfg.block_size;
-int   *inputs  = emalloc((size_t)span * sizeof *inputs);
-int   *targets = emalloc((size_t)span * sizeof *targets);
+typedef struct {
+    int   *inputs;
+    int   *targets;
+    AdamW  optimizer;
+} TrainingStepState;
 ```
 
-These are the exact opening storage lines from `train_loop`.
+One helper prepares that record before the loop:
+
+```c
+static TrainingStepState prepare_training_step_state(
+    const TrainOptions *options)
+{
+    int span = options->cfg.batch_size * options->cfg.block_size;
+    TrainingStepState state;
+
+    state.inputs     = emalloc((size_t)span * sizeof *state.inputs);
+    state.targets    = emalloc((size_t)span * sizeof *state.targets);
+    state.optimizer  = adamw_with_rate(options->learning_rate);
+    return state;
+}
+```
 
 `span` is safe because Chapter 14 already checked the combined `B*T`
 ceiling. The two `emalloc` calls turn six positions into a byte request
 with the Chapter 2
 [`sizeof` pattern](02-foundations.md#a-block-of-bytes-and-one-owner).
-The allocations live until the loop ends.
+The returned record copies two owning pointers and one small optimizer
+value. The allocations live until the loop ends.
 
 Only the learning rate is exposed as a train flag. The other recipe
 values remain the Chapter 8 policy:
@@ -327,10 +366,11 @@ direct pull toward zero. Chapter 8 constructed their meanings and
 [validates the recipe before changing history](08-adamw.md#check-the-recipe-before-changing-history).
 This adapter changes only the exposed learning rate.
 
-The resulting record is created once before the first iteration:
+The optimizer field is therefore created once before the first
+iteration:
 
 ```c
-AdamW  opt     = adamw_with_rate(options->learning_rate);
+state.optimizer  = adamw_with_rate(options->learning_rate);
 ```
 
 No core training step allocates memory. The model arenas, batch buffers,
@@ -814,20 +854,39 @@ conversion:
 static const double             MILLISECONDS_PER_SECOND = 1e3;
 ```
 
-After reusable buffers and fixed validation batches are prepared, the
-source creates the timing state:
+The fixed validation batches and timer travel through the reporting,
+sampling, and saving helpers. The source keeps them in one record:
 
 ```c
-double clock   = time_seconds();
-int    timed_steps = 0;
+typedef struct {
+    ValidationBatches validation;
+    double            clock;
+    int               timed_steps;
+} TrainingObservationState;
 ```
 
-The first value is Chapter 2's
+One helper prepares it:
+
+```c
+static TrainingObservationState prepare_training_observation(
+    const TrainingResources *resources, const TrainOptions *options)
+{
+    TrainingObservationState state;
+
+    state.validation =
+        prepare_validation(resources->validation_data, options);
+    state.clock       = time_seconds();
+    state.timed_steps = 0;
+    return state;
+}
+```
+
+`state.clock` receives Chapter 2's
 [monotonic elapsed-time clock](02-foundations.md#fixed-integers-and-a-clock-that-does-not-turn-back).
 The counter begins at zero. Each successful update then runs:
 
 ```c
-timed_steps++;
+observation.timed_steps++;
 ```
 
 A rejected update never enters the denominator. Before reading the
@@ -837,17 +896,18 @@ run inside the branch.
 
 **Predict:** which side of update 1 does each printed grade describe?
 
-Here is the exact branch:
+Printing the line and deciding whether it is due are separate jobs. The
+first helper chooses the line shape and performs optional validation:
 
 ```c
-if (step == 1 || step % LOSS_INTERVAL == 0) {
-    double now = time_seconds();
-    double milliseconds =
-        MILLISECONDS_PER_SECOND * (now - clock) / timed_steps;
-
-    if (validation.count > 0) {
+static void print_training_report(TrainingResources *resources,
+                                  TrainingObservationState *state,
+                                  const TrainOptions *options,
+                                  int step, float loss, double milliseconds)
+{
+    if (state->validation.count > 0) {
         float validation_loss =
-            measure_validation(m, validation, options);
+            measure_validation(resources->model, state->validation, options);
 
         printf("step %5d/%d | loss %.4f | val %.4f | %6.1f ms/step\n",
                step, options->steps, (double)loss,
@@ -856,8 +916,27 @@ if (step == 1 || step % LOSS_INTERVAL == 0) {
         printf("step %5d/%d | loss %.4f | %6.1f ms/step\n",
                step, options->steps, (double)loss, milliseconds);
     }
-    clock = time_seconds();   /* don't bill validation or reporting */
-    timed_steps = 0;
+}
+```
+
+The second helper owns the schedule and timer boundary:
+
+```c
+static void report_training_if_due(TrainingResources *resources,
+                                   TrainingObservationState *state,
+                                   const TrainOptions *options,
+                                   int step, float loss)
+{
+    if (step == 1 || step % LOSS_INTERVAL == 0) {
+        double now = time_seconds();
+        double milliseconds =
+            MILLISECONDS_PER_SECOND
+            * (now - state->clock) / state->timed_steps;
+
+        print_training_report(resources, state, options, step, loss,
+                              milliseconds);
+        restart_training_timer(state);
+    }
 }
 ```
 
@@ -869,7 +948,7 @@ separately, so a run produces early feedback without waiting.
 `now` is captured before validation and printing. The numerator
 therefore includes batch selection, gradient clearing, forward,
 backward, clipping, and updating, and stops before report work.
-`validation.count > 0` is the guard that protects
+`state->validation.count > 0` is the guard that protects
 `measure_validation` from its absent record.
 
 The training loss was measured before this step's update. The optional
@@ -886,12 +965,22 @@ digits after the decimal point. `%6.1f` prints one digit after the
 decimal in a field at least six characters wide. Wider values expand
 the field rather than being truncated.
 
-The reset happens after validation and output, so neither is billed to
-the next window. The definition is always "completed steps since the
-last reset." The step-1 report times one cycle and resets. The step-50
-report therefore averages steps 2 through 50, which is 49 completed
-cycles. Later ordinary report windows contain fifty unless another
-excluded event reset the clock between them.
+`restart_training_timer` runs after `print_training_report` returns, so
+validation and output are not billed to the next window:
+
+```c
+static void restart_training_timer(TrainingObservationState *state)
+{
+    state->clock       = time_seconds();
+    state->timed_steps = 0;
+}
+```
+
+The definition is always "completed steps since the last reset." The
+step-1 report times one cycle and resets. The step-50 report therefore
+averages steps 2 through 50, which is 49 completed cycles. Later
+ordinary report windows contain fifty unless another excluded event
+reset the clock between them.
 
 ## Schedule side effects after the update
 
@@ -943,19 +1032,29 @@ constructs what that scaling means and how the 200 choices are made.
 The learner implements this wrapper in `main.c`; the Chapter 15 lab's
 borrowed `model_sampling.c` supplies the called `model_sample` symbol.
 
-Two branches then follow reporting:
+Two small helpers own the remaining schedules:
 
 ```c
-if (step % SAMPLE_INTERVAL == 0) {
-    print_training_sample(m, tk, sample_rng, step);
-    clock = time_seconds();   /* don't bill sampling to training */
-    timed_steps = 0;
+static void sample_training_if_due(TrainingResources *resources,
+                                   TrainingObservationState *state, int step)
+{
+    if (step % SAMPLE_INTERVAL == 0) {
+        print_training_sample(resources->model, resources->tokenizer,
+                              resources->sample_rng, step);
+        restart_training_timer(state);
+    }
 }
-if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
-    if (model_save(m, tk, options->out_path) != 0)
-        die("cannot write checkpoint %s", options->out_path);
-    clock = time_seconds();   /* don't bill checkpoint I/O either */
-    timed_steps = 0;
+
+static void save_training_if_due(TrainingResources *resources,
+                                 TrainingObservationState *state,
+                                 const TrainOptions *options, int step)
+{
+    if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
+        if (model_save(resources->model, resources->tokenizer,
+                       options->out_path) != 0)
+            die("cannot write checkpoint %s", options->out_path);
+        restart_training_timer(state);
+    }
 }
 ```
 
@@ -1040,84 +1139,36 @@ this chapter owns has been constructed; `model_sample` remains the
 marked Chapter 16 handoff:
 
 ```c
-static void train_loop(Model *m, const Tokenizer *tk, const Dataset *ds,
-                       const Dataset *validation_ds,
-                       Rng *batch_rng, Rng *sample_rng,
+static void train_loop(TrainingResources *resources,
                        const TrainOptions *options)
 {
-    int    span    = options->cfg.batch_size * options->cfg.block_size;
-    int   *inputs  = emalloc((size_t)span * sizeof *inputs);
-    int   *targets = emalloc((size_t)span * sizeof *targets);
-    AdamW  opt     = adamw_with_rate(options->learning_rate);
-    ValidationBatches validation = prepare_validation(validation_ds, options);
-    double clock   = time_seconds();
-    int    timed_steps = 0;
+    TrainingStepState step_state = prepare_training_step_state(options);
+    TrainingObservationState observation =
+        prepare_training_observation(resources, options);
 
     for (int step = 1; step <= options->steps; step++) {
-        dataset_batch(ds, batch_rng, inputs, targets,
-                      options->cfg.batch_size, options->cfg.block_size);
-        model_zero_gradients(m);
+        float loss =
+            run_training_step(resources, &step_state, options, step);
 
-        float loss = model_forward(m, inputs, targets,
-                                   options->cfg.batch_size, options->cfg.block_size);
-
-        model_backward(m);
-        if (model_step(m, opt, step) != 0)
-            die("non-finite gradient or invalid optimizer update at step %d",
-                step);
-        timed_steps++;
-
-        if (step == 1 || step % LOSS_INTERVAL == 0) {
-            double now = time_seconds();
-            double milliseconds =
-                MILLISECONDS_PER_SECOND * (now - clock) / timed_steps;
-
-            if (validation.count > 0) {
-                float validation_loss =
-                    measure_validation(m, validation, options);
-
-                printf("step %5d/%d | loss %.4f | val %.4f | %6.1f ms/step\n",
-                       step, options->steps, (double)loss,
-                       (double)validation_loss, milliseconds);
-            } else {
-                printf("step %5d/%d | loss %.4f | %6.1f ms/step\n",
-                       step, options->steps, (double)loss, milliseconds);
-            }
-            clock = time_seconds();   /* don't bill validation or reporting */
-            timed_steps = 0;
-        }
-        if (step % SAMPLE_INTERVAL == 0) {
-            print_training_sample(m, tk, sample_rng, step);
-            clock = time_seconds();   /* don't bill sampling to training */
-            timed_steps = 0;
-        }
-        if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
-            if (model_save(m, tk, options->out_path) != 0)
-                die("cannot write checkpoint %s", options->out_path);
-            clock = time_seconds();   /* don't bill checkpoint I/O either */
-            timed_steps = 0;
-        }
+        observation.timed_steps++;
+        report_training_if_due(resources, &observation, options, step, loss);
+        sample_training_if_due(resources, &observation, step);
+        save_training_if_due(resources, &observation, options, step);
     }
-    free_validation(validation);
-    free(inputs);
-    free(targets);
+    free_training_observation(observation);
+    free_training_step_state(step_state);
 }
 ```
 
-The signature carries seven arguments. `m` is the model the function
-changes. `tk` labels progress text. `ds` supplies training batches, and
-`validation_ds` is either the checked held-out dataset or `NULL`. The
-two RNG pointers keep batch and progress draws separate. `options`
-supplies the already checked configuration, rate, count, seed, and
-output path.
+The signature carries two records. `resources` supplies the model,
+tokenizer, datasets, and separate RNG handles. `options` supplies the
+checked configuration, rate, count, seed, and output path.
 
-The opening lines allocate the reusable buffers, build the optimizer
-recipe, deal any fixed validation batches, and start the timer. The
-`for` body then joins the exact fragments already walked: one core
-update, a due report, a due progress sample, and a due save. The three
-final calls release only storage owned by `train_loop`. The model,
-datasets, tokenizer, and two long-lived RNG handles remain valid until
-the `run_train` cleanup shown at the start of the chapter.
+The opening calls prepare step storage and observation storage. The
+`for` body then joins the exact helpers already walked: one update, a
+due report, a due progress sample, and a due save. The final two calls
+release only storage owned by `train_loop`. The six command resources
+remain valid until `run_train` calls `free_training_resources`.
 
 ## First light
 

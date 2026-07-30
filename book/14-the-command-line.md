@@ -789,37 +789,51 @@ source bytes. The representability limits ensure that a later
 one-`int`-per-source-byte allocation and the model's integer interfaces
 remain expressible.
 
-The beginning of [`run_train`](../src/main.c) is shown here in
-shortened pieces. First, the training corpus:
+The beginning of [`run_train`](../src/main.c) is divided by task.
+`run_train` rejects path aliases first. The next helper owns the
+bounded training read:
 
 ```c
-reject_training_path_collisions(&options);
+static char *read_training_text(const TrainOptions *options, size_t *length)
+{
+    char *text;
+    FileSlurpStatus status =
+        file_slurp_bounded(options->data_path, dataset_max_text_bytes(),
+                           &text, length);
 
-size_t length;
-char  *text;
-FileSlurpStatus read_status =
-    file_slurp_bounded(options.data_path, dataset_max_text_bytes(),
-                       &text, &length);
+    if (status == FILE_SLURP_TOO_LARGE)
+        die("corpus %s exceeds the platform limit of %zu bytes",
+            options->data_path, dataset_max_text_bytes());
+    if (status != FILE_SLURP_OK)
+        die("cannot read corpus %s (try `make corpus` or `make data`)",
+            options->data_path);
+    return text;
+}
+```
 
-if (read_status == FILE_SLURP_TOO_LARGE)
-    die("corpus %s exceeds the platform limit of %zu bytes",
-        options.data_path, dataset_max_text_bytes());
-if (read_status != FILE_SLURP_OK)
-    die("cannot read corpus %s (try `make corpus` or `make data`)",
-        options.data_path);
+One caller turns those bytes into the tokenizer and training dataset:
 
-Tokenizer *tk = tokenizer_new(text, length);
+```c
+static Dataset *load_training_data(const TrainOptions *options,
+                                   Tokenizer **tokenizer)
+{
+    size_t length;
+    char  *text = read_training_text(options, &length);
 
-(void)newline_id(tk);   /* fail before allocating a model or starting a run */
+    *tokenizer = tokenizer_new(text, length);
+    (void)newline_id(*tokenizer);
 
-Dataset *ds = dataset_new(tk, text, length);
+    Dataset *dataset = dataset_new(*tokenizer, text, length);
 
-free(text);
-if (ds == NULL)
-    die("corpus %s cannot fit in a token buffer on this platform",
-        options.data_path);
-if (dataset_token_count(ds) < (size_t)options.cfg.block_size + 1)
-    die("corpus %s is smaller than one training window", options.data_path);
+    free(text);
+    if (dataset == NULL)
+        die("corpus %s cannot fit in a token buffer on this platform",
+            options->data_path);
+    if (dataset_token_count(dataset) < (size_t)options->cfg.block_size + 1)
+        die("corpus %s is smaller than one training window",
+            options->data_path);
+    return dataset;
+}
 ```
 
 The path check precedes file reads. The bounded reader distinguishes a
@@ -832,10 +846,11 @@ training command promises progress sampling later in a longer run; that
 sampling starts from a newline. `(void)` says the returned id is
 deliberately discarded here. The call is a preflight.
 
-`dataset_new` allocates room for as many integer ids as source bytes,
-encodes the text, and owns that token buffer. Only then can the raw
-source byte allocation be freed. The final comparison constructs the
-`T + 1` requirement from
+`load_training_data` returns the dataset and writes the tokenizer
+pointer through its second argument. `dataset_new` allocates room for
+as many integer ids as source bytes, encodes the text, and owns that
+token buffer. Only then can the raw source byte allocation be freed.
+The final comparison constructs the `T + 1` requirement from
 [Chapter 3's shifted windows](03-data.md#one-extra-token-supplies-every-answer).
 
 Validation must reuse the training alphabet. Work through this pair:
@@ -866,27 +881,37 @@ three known ids are also too short. Source order reports the unknown
 byte first and exits, so the later window check does not run for this
 request.
 
-The corresponding source is:
+The corresponding helper is:
 
 ```c
-validation_ds = dataset_new(tk, validation_text, validation_length);
-free(validation_text);
-if (validation_ds == NULL)
-    die("validation corpus %s cannot fit in a token buffer on this platform",
-        options.validation_path);
-if (dataset_token_count(validation_ds) != validation_length)
-    die("validation corpus %s contains bytes absent from training data",
-        options.validation_path);
-if (dataset_token_count(validation_ds)
-    < (size_t)options.cfg.block_size + 1)
-    die("validation corpus %s is smaller than one training window",
-        options.validation_path);
+static Dataset *load_validation_data(const TrainOptions *options,
+                                     const Tokenizer *tokenizer)
+{
+    if (options->validation_path == NULL)
+        return NULL;
+
+    size_t length;
+    char  *text    = read_validation_text(options, &length);
+    Dataset *dataset = dataset_new(tokenizer, text, length);
+
+    free(text);
+    if (dataset == NULL)
+        die("validation corpus %s cannot fit in a token buffer on this platform",
+            options->validation_path);
+    if (dataset_token_count(dataset) != length)
+        die("validation corpus %s contains bytes absent from training data",
+            options->validation_path);
+    if (dataset_token_count(dataset) < (size_t)options->cfg.block_size + 1)
+        die("validation corpus %s is smaller than one training window",
+            options->validation_path);
+    return dataset;
+}
 ```
 
-This excerpt begins after the validation file has passed the same
-bounded read. Comparing encoded count with source length works because
-this project gives every accepted byte exactly one id. Building a
-second tokenizer would hide the unknown `X` by adding it to a different
+`read_validation_text` performs the same bounded read in its own small
+helper. Comparing encoded count with source length works because this
+project gives every accepted byte exactly one id. Building a second
+tokenizer would hide the unknown `X` by adding it to a different
 alphabet, and the validation score would no longer measure the same
 model vocabulary.
 
@@ -894,23 +919,43 @@ Only after both datasets survive does setup fill the vocabulary size,
 check combined dimensions, and ask for a memory report:
 
 ```c
-options.cfg.vocab_size = tokenizer_vocab_size(tk);
-if (!model_config_valid(options.cfg))
-    die("impossible model configuration: --width must be divisible by --heads "
-        "and --batch x --block must stay within %d tokens",
-        MODEL_MAX_TOKENS_PER_PASS);
-ModelMemory memory;
+static void validate_training_model(TrainOptions *options,
+                                    const Tokenizer *tokenizer)
+{
+    options->cfg.vocab_size = tokenizer_vocab_size(tokenizer);
+    if (!model_config_valid(options->cfg))
+        die("impossible model configuration: --width must be divisible by --heads "
+            "and --batch x --block must stay within %d tokens",
+            MODEL_MAX_TOKENS_PER_PASS);
 
-if (!model_memory_requirements(options.cfg, &memory))
-    die("model memory requirements overflow this platform");
-if (memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES)
-    die("model needs %.1f MiB of buffers; the CLI limit is %.0f MiB",
-        (double)memory.total_bytes / (1024.0 * 1024.0),
-        (double)MODEL_MAX_CHECKPOINT_RESIDENT_BYTES / (1024.0 * 1024.0));
+    ModelMemory memory;
 
-Model *m          = model_new(options.cfg, options.seed);
-Rng   *batch_rng  = rng_new(options.seed);
-Rng   *sample_rng = rng_new(options.seed + SAMPLE_SEED_OFFSET);
+    if (!model_memory_requirements(options->cfg, &memory))
+        die("model memory requirements overflow this platform");
+    if (memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES)
+        die("model needs %.1f MiB of buffers; the CLI limit is %.0f MiB",
+            (double)memory.total_bytes / (1024.0 * 1024.0),
+            (double)MODEL_MAX_CHECKPOINT_RESIDENT_BYTES / (1024.0 * 1024.0));
+}
+```
+
+One coordinator preserves the required order:
+
+```c
+static TrainingResources prepare_training_resources(TrainOptions *options)
+{
+    TrainingResources resources = { 0 };
+
+    resources.training_data =
+        load_training_data(options, &resources.tokenizer);
+    resources.validation_data =
+        load_validation_data(options, resources.tokenizer);
+    validate_training_model(options, resources.tokenizer);
+    resources.model      = model_new(options->cfg, options->seed);
+    resources.batch_rng  = rng_new(options->seed);
+    resources.sample_rng = rng_new(options->seed + SAMPLE_SEED_OFFSET);
+    return resources;
+}
 ```
 
 The geometry check includes `C % H == 0` and
@@ -940,7 +985,12 @@ recoverable conditions that can be checked before allocating the model
 or entering the long-running operation. It reduces late failures. It
 cannot prove that future allocation or output I/O will succeed.
 
-The final three constructors also separate randomness by job. Model
+`TrainingResources` keeps the six owners needed by the command in one
+small record: tokenizer, two datasets, model, and two RNG handles. The
+coordinator does not perform their work. Its calls make the setup order
+visible.
+
+The final three constructors separate randomness by job. Model
 initialization and batch selection receive the same numeric seed but
 different `Rng` objects. Progress sampling receives `seed + 1`.
 Validation batches, created later inside the training loop, receive
