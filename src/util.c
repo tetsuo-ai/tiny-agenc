@@ -40,6 +40,33 @@ void die(const char *format, ...)
     exit(EXIT_FAILURE);
 }
 
+static FileSlurpStatus measure_file(FILE *stream, size_t maximum,
+                                    size_t *length)
+{
+    if (fseeko(stream, 0, SEEK_END) != 0)
+        return FILE_SLURP_IO_ERROR;
+
+    off_t end = ftello(stream);
+
+    if (end < 0 || fseeko(stream, 0, SEEK_SET) != 0)
+        return FILE_SLURP_IO_ERROR;
+    if ((uintmax_t)end > (uintmax_t)maximum
+        || (uintmax_t)end >= (uintmax_t)SIZE_MAX)
+        return FILE_SLURP_TOO_LARGE;
+
+    *length = (size_t)end;
+    return FILE_SLURP_OK;
+}
+
+static int read_exact_file(FILE *stream, char *contents, size_t length)
+{
+    if (fread(contents, 1, length, stream) != length)
+        return -1;
+    if (fgetc(stream) != EOF || ferror(stream))
+        return -1;
+    return 0;
+}
+
 FileSlurpStatus file_slurp_bounded(const char *path, size_t maximum,
                                    char **text, size_t *size)
 {
@@ -47,39 +74,37 @@ FileSlurpStatus file_slurp_bounded(const char *path, size_t maximum,
         return FILE_SLURP_IO_ERROR;
     *text = NULL;
     *size = 0;
+    if (path == NULL)
+        return FILE_SLURP_IO_ERROR;
 
     FILE *stream = fopen(path, "rb");
 
     if (stream == NULL)
         return FILE_SLURP_IO_ERROR;
-    if (fseeko(stream, 0, SEEK_END) != 0) {
+
+    size_t length;
+    FileSlurpStatus status = measure_file(stream, maximum, &length);
+
+    if (status != FILE_SLURP_OK) {
         fclose(stream);
-        return FILE_SLURP_IO_ERROR;
+        return status;
     }
 
-    off_t end = ftello(stream);
+    char *contents = emalloc(length + 1);
 
-    if (end < 0 || fseeko(stream, 0, SEEK_SET) != 0) {
-        fclose(stream);
-        return FILE_SLURP_IO_ERROR;
-    }
-    if ((uintmax_t)end > (uintmax_t)maximum
-        || (uintmax_t)end >= (uintmax_t)SIZE_MAX) {
-        fclose(stream);
-        return FILE_SLURP_TOO_LARGE;
-    }
-
-    char *contents = emalloc((size_t)end + 1);
-
-    if (fread(contents, 1, (size_t)end, stream) != (size_t)end) {
+    if (read_exact_file(stream, contents, length) != 0) {
         free(contents);
         fclose(stream);
         return FILE_SLURP_IO_ERROR;
     }
-    fclose(stream);
-    contents[(size_t)end] = '\0';
+    if (fclose(stream) != 0) {
+        free(contents);
+        return FILE_SLURP_IO_ERROR;
+    }
+
+    contents[length] = '\0';
     *text = contents;
-    *size = (size_t)end;
+    *size = length;
     return FILE_SLURP_OK;
 }
 

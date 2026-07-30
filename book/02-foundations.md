@@ -239,67 +239,37 @@ prefix. Returning one of the three named values prevents callers from
 guessing whether `NULL` meant a missing file or a rejected size. C
 calls a type name introduced with `typedef` a **type alias**.
 
-Here is the first part of the complete
-[`file_slurp_bounded`](../src/util.c):
+Start with the stage that measures and rewinds the stream:
 
 ```c
-FileSlurpStatus file_slurp_bounded(const char *path, size_t maximum,
-                                   char **text, size_t *size)
+static FileSlurpStatus measure_file(FILE *stream, size_t maximum,
+                                    size_t *length)
 {
-    if (text == NULL || size == NULL)
+    if (fseeko(stream, 0, SEEK_END) != 0)
         return FILE_SLURP_IO_ERROR;
-    *text = NULL;
-    *size = 0;
-
-    FILE *stream = fopen(path, "rb");
-
-    if (stream == NULL)
-        return FILE_SLURP_IO_ERROR;
-    if (fseeko(stream, 0, SEEK_END) != 0) {
-        fclose(stream);
-        return FILE_SLURP_IO_ERROR;
-    }
 
     off_t end = ftello(stream);
+
+    if (end < 0 || fseeko(stream, 0, SEEK_SET) != 0)
+        return FILE_SLURP_IO_ERROR;
+    if ((uintmax_t)end > (uintmax_t)maximum
+        || (uintmax_t)end >= (uintmax_t)SIZE_MAX)
+        return FILE_SLURP_TOO_LARGE;
+
+    *length = (size_t)end;
+    return FILE_SLURP_OK;
+}
 ```
 
-`char **text` is the address of the caller's `char *` output. One star
-reaches the caller's pointer; assigning `*text = NULL` changes that
-pointer. `size_t *size` works the same way for the length. The function
-checks that both output addresses exist. The `||` operator means
-logical OR: C checks the left condition first, then the right one only
-if needed. The function returns if either address is missing. It then
-initializes both outputs before any file operation can fail. A caller
-that receives an error will not mistake stale values for a partial
-result.
-
-`fopen(path, "rb")` opens the path for reading in binary mode. A
 `FILE *` is the standard library's handle for an open stream. `fseeko`
 moves to the end, and `ftello` reports that position as an `off_t`, the
-system's file-offset type. Every path that has opened the stream must
-later call `fclose`.
+system's file-offset type. A negative offset signals failure.
+`SEEK_SET` rewinds to byte zero so the later read starts at the
+beginning.
 
-The function continues:
-
-```c
-    if (end < 0 || fseeko(stream, 0, SEEK_SET) != 0) {
-        fclose(stream);
-        return FILE_SLURP_IO_ERROR;
-    }
-    if ((uintmax_t)end > (uintmax_t)maximum
-        || (uintmax_t)end >= (uintmax_t)SIZE_MAX) {
-        fclose(stream);
-        return FILE_SLURP_TOO_LARGE;
-    }
-
-    char *contents = emalloc((size_t)end + 1);
-```
-
-A negative offset signals failure. `SEEK_SET` rewinds to byte zero so
-the later read starts at the beginning. The next condition answers two
-different questions before allocating: does the file exceed the
-caller's ceiling, and can the program add the sentinel byte without
-overflowing `size_t`?
+The next condition answers two different questions before allocating:
+does the file exceed the caller's ceiling, and can the program add the
+sentinel byte without overflowing `size_t`?
 
 `uintmax_t` is an unsigned integer type wide enough to hold any standard
 unsigned integer. Converting both sides before comparison avoids
@@ -317,28 +287,88 @@ Predict the result for an empty file with `maximum = 0`. Its length
 equals the ceiling, so the reader allocates one byte, writes the
 sentinel at index zero, reports length zero, and succeeds.
 
-The final part publishes the result only after a complete read:
+The measured length can become stale before the read. A file could
+shrink, grow, or report a size that does not match the bytes it
+produces. The next stage requires exactly the measured bytes followed
+immediately by a clean end of file:
 
 ```c
-    if (fread(contents, 1, (size_t)end, stream) != (size_t)end) {
+static int read_exact_file(FILE *stream, char *contents, size_t length)
+{
+    if (fread(contents, 1, length, stream) != length)
+        return -1;
+    if (fgetc(stream) != EOF || ferror(stream))
+        return -1;
+    return 0;
+}
+```
+
+`fread` requests `length` objects of one byte each. If the return value
+is smaller, the stream ended or failed before supplying the promised
+bytes.
+After those bytes, `fgetc` tries to read one more. An extra byte means
+the file grew beyond the measured length. `EOF` can also report an I/O
+failure, so `ferror` distinguishes a clean end from an error.
+
+The public function now coordinates those two stages:
+
+```c
+FileSlurpStatus file_slurp_bounded(const char *path, size_t maximum,
+                                   char **text, size_t *size)
+{
+    if (text == NULL || size == NULL)
+        return FILE_SLURP_IO_ERROR;
+    *text = NULL;
+    *size = 0;
+    if (path == NULL)
+        return FILE_SLURP_IO_ERROR;
+
+    FILE *stream = fopen(path, "rb");
+
+    if (stream == NULL)
+        return FILE_SLURP_IO_ERROR;
+
+    size_t length;
+    FileSlurpStatus status = measure_file(stream, maximum, &length);
+
+    if (status != FILE_SLURP_OK) {
+        fclose(stream);
+        return status;
+    }
+
+    char *contents = emalloc(length + 1);
+
+    if (read_exact_file(stream, contents, length) != 0) {
         free(contents);
         fclose(stream);
         return FILE_SLURP_IO_ERROR;
     }
-    fclose(stream);
-    contents[(size_t)end] = '\0';
+    if (fclose(stream) != 0) {
+        free(contents);
+        return FILE_SLURP_IO_ERROR;
+    }
+
+    contents[length] = '\0';
     *text = contents;
-    *size = (size_t)end;
+    *size = length;
     return FILE_SLURP_OK;
 }
 ```
 
-`fread` requests `end` objects of one byte each. A smaller return value
-means the stream ended or failed before supplying the promised bytes.
-That branch releases the owned block and closes the stream. On success,
-the stream closes, the sentinel is written one position after the file,
-and only then do the caller's outputs change from `NULL` and zero to the
-finished buffer and length.
+`char **text` is the address of the caller's `char *` output. One star
+reaches the caller's pointer; assigning `*text = NULL` changes that
+pointer. `size_t *size` works the same way for the length. The `||`
+operator means logical OR: C checks the left condition first, then the
+right one only if needed. The function rejects a missing output
+address. It then initializes both outputs before checking the path or
+opening the file. A caller that receives an error will not mistake
+stale values for a partial result.
+
+`fopen(path, "rb")` opens the path for reading in binary mode. Every
+path that has opened the stream later calls `fclose`. A read failure
+releases the owned block before closing. Even after a complete read,
+the close itself must succeed. Only then does the function append the
+sentinel and publish the finished buffer and length.
 
 The unbounded convenience function is now small:
 
@@ -1649,7 +1679,8 @@ constant shown in the chapter. Then implement `file_slurp`,
 `time_seconds`. The bounded reader must initialize valid output
 pointers before fallible work, reject an excessive length before
 allocating or reading the body, accept its exact ceiling, preserve
-binary zero bytes, and append one sentinel byte.
+binary zero bytes, reject bytes beyond the measured end, require a
+successful close before publication, and append one sentinel byte.
 
 In `labs/work/rng.c`, add the required headers, fixed PCG constants,
 private `Rng` definition, and circle constant. Implement the PCG32 state
@@ -1665,11 +1696,15 @@ make -C labs check-02
 # answer key: make check-foundations
 ```
 
-**Expected.** The witness reports all 322 foundation checks passed.
+**Expected.** On GNU/Linux, the witness reports all 330 foundation
+checks passed.
 File slurping preserves `A`, an embedded zero byte, and `Z`, reports
 length three, and appends a sentinel. A ceiling of two rejects that
-file; a ceiling of three accepts it. Missing files and oversized files
-produce different statuses, with outputs reset on both failures.
+file; a ceiling of three accepts it. An empty file succeeds under a
+zero-byte ceiling. Missing files and oversized files produce different
+statuses, with outputs reset on both failures. The `/proc/self/cmdline`
+witness reports a measured zero length but produces bytes, so the
+reader rejects it rather than publishing a partial result.
 
 `INT32_MIN` and `INT32_MAX` round-trip, a third read fails, allocated
 zeroed storage contains zeroes, and successive clock reads do not move

@@ -3,7 +3,7 @@ CC      ?= cc
 WORK    ?= work
 OPENMP  ?= 0
 CFLAGS  ?= -std=c11 -O0 -g -Wall -Wextra -Werror -Wno-unknown-pragmas
-LDLIBS  ?= -lm
+LDLIBS  ?= -lacl -lm
 
 ifeq ($(OPENMP),1)
 CFLAGS += -fopenmp

@@ -583,9 +583,15 @@ static void save_training_if_due(TrainingResources *resources,
                                  const TrainOptions *options, int step)
 {
     if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
-        if (model_save(resources->model, resources->tokenizer,
-                       options->out_path) != 0)
+        ModelSaveResult saved =
+            model_save_durable(resources->model, resources->tokenizer,
+                               options->out_path);
+
+        if (saved == MODEL_SAVE_NOT_COMMITTED)
             die("cannot write checkpoint %s", options->out_path);
+        if (saved == MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED)
+            die("checkpoint %s was committed, but directory finalization "
+                "failed; durability is unconfirmed", options->out_path);
         restart_training_timer(state);
     }
 }

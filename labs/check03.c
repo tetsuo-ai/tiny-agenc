@@ -23,6 +23,30 @@ static void expect(int condition, const char *message)
     failures++;
 }
 
+static Tokenizer *read_vocabulary_fixture(int32_t count,
+                                          const unsigned char *bytes,
+                                          size_t stored)
+{
+    FILE *stream = tmpfile();
+
+    expect(stream != NULL, "the vocabulary fixture opens");
+    if (stream == NULL)
+        return NULL;
+    int written = fwrite(&count, sizeof count, 1, stream) == 1
+               && fwrite(bytes, 1, stored, stream) == stored;
+
+    expect(written, "the vocabulary fixture is written");
+    if (!written || fseek(stream, 0, SEEK_SET) != 0) {
+        fclose(stream);
+        return NULL;
+    }
+
+    Tokenizer *tk = tokenizer_read(stream);
+
+    expect(fclose(stream) == 0, "the vocabulary fixture closes");
+    return tk;
+}
+
 int main(void)
 {
     static const char VOCABULARY[] = "zaba\n";
@@ -79,21 +103,38 @@ int main(void)
         fclose(serialized);
     }
 
-    FILE *reordered = tmpfile();
+    static const unsigned char DESCENDING[] = { 'z', 'a' };
+    static const unsigned char DUPLICATE[] = { 'a', 'a' };
+    static const unsigned char SHORT_BODY[] = { 'a' };
+    static const unsigned char HIGH_BYTES[] = {
+        0x00u, 0x7Fu, 0x80u, 0xFFu,
+    };
 
-    expect(reordered != NULL, "the malformed tokenizer fixture opens");
-    if (reordered != NULL) {
-        int32_t two = 2;
-        static const unsigned char DESCENDING[] = { 'z', 'a' };
+    expect(read_vocabulary_fixture(2, DESCENDING,
+                                   sizeof DESCENDING) == NULL,
+           "tokenizer loading rejects descending byte order");
+    expect(read_vocabulary_fixture(2, DUPLICATE,
+                                   sizeof DUPLICATE) == NULL,
+           "tokenizer loading rejects duplicate neighbors");
+    expect(read_vocabulary_fixture(2, SHORT_BODY,
+                                   sizeof SHORT_BODY) == NULL,
+           "tokenizer loading rejects a short vocabulary body");
+    expect(read_vocabulary_fixture(0, HIGH_BYTES, 0) == NULL,
+           "tokenizer loading rejects an empty saved vocabulary");
+    expect(read_vocabulary_fixture(257, HIGH_BYTES, 0) == NULL,
+           "tokenizer loading rejects a count above the byte alphabet");
 
-        expect(fwrite(&two, sizeof two, 1, reordered) == 1
-               && fwrite(DESCENDING, 1, sizeof DESCENDING, reordered)
-                    == sizeof DESCENDING,
-               "the malformed tokenizer fixture is written");
-        rewind(reordered);
-        expect(tokenizer_read(reordered) == NULL,
-               "tokenizer loading rejects a noncanonical byte order");
-        fclose(reordered);
+    Tokenizer *high = read_vocabulary_fixture(4, HIGH_BYTES,
+                                              sizeof HIGH_BYTES);
+
+    expect(high != NULL && tokenizer_vocab_size(high) == 4,
+           "canonical unsigned high bytes load");
+    if (high != NULL) {
+        for (int id = 0; id < 4; id++)
+            expect((unsigned char)tokenizer_decode(high, id)
+                       == HIGH_BYTES[id],
+                   "loaded high-byte ids keep unsigned order");
+        tokenizer_free(high);
     }
     tokenizer_free(tk);
 

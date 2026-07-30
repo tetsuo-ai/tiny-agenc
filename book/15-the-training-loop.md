@@ -1050,9 +1050,15 @@ static void save_training_if_due(TrainingResources *resources,
                                  const TrainOptions *options, int step)
 {
     if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
-        if (model_save(resources->model, resources->tokenizer,
-                       options->out_path) != 0)
+        ModelSaveResult saved =
+            model_save_durable(resources->model, resources->tokenizer,
+                               options->out_path);
+
+        if (saved == MODEL_SAVE_NOT_COMMITTED)
             die("cannot write checkpoint %s", options->out_path);
+        if (saved == MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED)
+            die("checkpoint %s was committed, but directory finalization "
+                "failed; durability is unconfirmed", options->out_path);
         restart_training_timer(state);
     }
 }
@@ -1077,6 +1083,13 @@ Chapter 13's [version 1 promise](13-durable-checkpoints.md#state-the-version-1-p
 stores configuration, tokenizer vocabulary, and parameter values. It
 does not store AdamW moments, step number, or RNG states, so this is a
 generation checkpoint rather than exact interrupted-training state.
+
+`model_save_durable` returns Chapter 13's three-way save result. A
+pre-commit failure means the destination was not replaced. A
+post-commit directory sync or close failure means the complete new
+checkpoint is visible, but crash recovery was not confirmed. Both stop
+training; only `MODEL_SAVE_DURABLE` resets the timer and lets the loop
+continue.
 
 Predict the due work for a 260-step run:
 

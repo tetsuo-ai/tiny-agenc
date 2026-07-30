@@ -127,11 +127,13 @@ to the historical measured source snapshot.
 
 A later construction-boundary fix made `model_new` retain its checked
 configuration and size preflight when assertions are disabled. Later
-source cleanup divided the training command into small named helpers
-while retaining its operation order. The current source aggregate is:
+source cleanup divided the training command, bounded file reader,
+tokenizer loader, and checkpoint path into small named stages while
+retaining their operation order and TAGC version 1 payload. The current
+source aggregate is:
 
 ```text
-64c09fea70e7dd00e095e1fd722772d3cca217dc961dfb304c96713022a578c0
+16f4b7f49a92edb59d9640a9480ad4ddd9da0f283d968da2b15913e8ebb01b8b
 ```
 
 `make check-ndebug` builds that source with `-DNDEBUG`, passes the
@@ -140,6 +142,27 @@ verifies that invalid geometry exits with failure. The valid-model
 arithmetic is unchanged. The compatibility training replays above
 remain attributed to the earlier `76a076...` hardened aggregate rather
 than being relabeled as measurements of this later boundary fix.
+
+The checkpoint refactor was also compared directly with commit
+`af73d2d2561c03f55ce021d1b7c6d9bbb1c87179`. Both trees were built on
+x86-64 Ubuntu 24.04 with GCC 13.3.0, OpenMP disabled, and the default
+`-O3 -ffast-math` flags. They ran this one-step witness against
+`labs/tiny-corpus.txt`, whose SHA-256 is
+`ff1124610dc483a1b8ccafdb9650438ad98436bb143a130569d104da0161f980`:
+
+```sh
+./tiny-agenc train \
+    --data labs/tiny-corpus.txt --out /tmp/tiny-agenc-witness.bin \
+    --steps 1 --layers 1 --heads 1 --width 8 \
+    --block 8 --batch 1 --seed 1337
+```
+
+The old and new 4,286-byte checkpoints compared equal and shared
+SHA-256
+`dd647b63ce090c2bb28e42f52a6431b07e295a7bbcb86d61c805f993c39d101d`.
+The checkpoint failure harness separately pins a 121-byte deterministic
+TAGC writer fixture to the pre-refactor bytes on its recorded
+little-endian IEEE binary32 platform.
 
 ## Full-corpus showcase
 

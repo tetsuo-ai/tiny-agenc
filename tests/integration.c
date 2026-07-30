@@ -27,6 +27,7 @@
 #include "param.h"
 #include "rng.h"
 #include "tokenizer.h"
+#include "util.h"
 
 static int checks;
 static int failures;
@@ -59,6 +60,70 @@ static float float_from_bits(uint32_t bits)
 static int finite_float(float value)
 {
     return (float_bits(value) & 0x7F800000u) != 0x7F800000u;
+}
+
+static void check_file_slurp(void)
+{
+    char path[] = "/tmp/tiny-agenc-integration-slurp-XXXXXX";
+    int descriptor = mkstemp(path);
+
+    expect(descriptor >= 0, "bounded slurp fixture path is created");
+    if (descriptor < 0)
+        return;
+
+    FILE *stream = fdopen(descriptor, "wb");
+    static const unsigned char BYTES[] = { 'A', 0, 'Z' };
+
+    expect(stream != NULL, "bounded slurp fixture stream opens");
+    if (stream == NULL) {
+        close(descriptor);
+        remove(path);
+        return;
+    }
+    int wrote_fixture =
+        fwrite(BYTES, 1, sizeof BYTES, stream) == sizeof BYTES;
+    int closed_fixture = fclose(stream) == 0;
+
+    expect(wrote_fixture && closed_fixture,
+           "bounded slurp fixture is written");
+
+    char *text = (char *)1;
+    size_t size = 99;
+
+    expect(file_slurp_bounded(path, sizeof BYTES, &text, &size)
+               == FILE_SLURP_OK
+           && text != NULL && size == sizeof BYTES
+           && memcmp(text, BYTES, sizeof BYTES) == 0
+           && text[size] == '\0',
+           "bounded slurp accepts an exact ceiling and appends a sentinel");
+    free(text);
+
+    text = (char *)1;
+    size = 99;
+    expect(file_slurp_bounded(path, sizeof BYTES - 1, &text, &size)
+               == FILE_SLURP_TOO_LARGE
+           && text == NULL && size == 0,
+           "bounded slurp rejects an oversized file without output");
+
+    stream = fopen(path, "wb");
+    int closed_empty = stream != NULL && fclose(stream) == 0;
+
+    expect(closed_empty,
+           "empty bounded slurp fixture is written");
+    text = (char *)1;
+    size = 99;
+    expect(file_slurp_bounded(path, 0, &text, &size) == FILE_SLURP_OK
+           && text != NULL && size == 0 && text[0] == '\0',
+           "bounded slurp accepts an empty exact-ceiling file");
+    free(text);
+
+    text = (char *)1;
+    size = 99;
+    expect(file_slurp_bounded(NULL, 0, &text, &size)
+               == FILE_SLURP_IO_ERROR
+           && text == NULL && size == 0,
+           "bounded slurp rejects a missing path and clears outputs");
+    remove(path);
 }
 
 static int configs_equal(ModelConfig a, ModelConfig b)
@@ -134,6 +199,28 @@ static void check_rng(void)
 
 /* -------- tokenizer and dataset -------- */
 
+static Tokenizer *read_vocabulary_fixture(int32_t count,
+                                          const unsigned char *bytes,
+                                          size_t stored)
+{
+    FILE *stream = tmpfile();
+
+    if (stream == NULL
+        || fwrite(&count, sizeof count, 1, stream) != 1
+        || fwrite(bytes, 1, stored, stream) != stored
+        || fseek(stream, 0, SEEK_SET) != 0) {
+        if (stream != NULL)
+            fclose(stream);
+        expect(0, "tokenizer malformed fixture is writable");
+        return NULL;
+    }
+
+    Tokenizer *tk = tokenizer_read(stream);
+
+    expect(fclose(stream) == 0, "tokenizer malformed fixture closes");
+    return tk;
+}
+
 static void check_tokenizer(void)
 {
     static const char VOCABULARY_TEXT[] = "zaba\n";
@@ -184,6 +271,40 @@ static void check_tokenizer(void)
             tokenizer_free(loaded);
         }
         fclose(serialized);
+    }
+
+    static const unsigned char DESCENDING[] = { 'z', 'a' };
+    static const unsigned char DUPLICATE[] = { 'a', 'a' };
+    static const unsigned char SHORT_BODY[] = { 'a' };
+    static const unsigned char HIGH_BYTES[] = {
+        0x00u, 0x7Fu, 0x80u, 0xFFu,
+    };
+
+    expect(read_vocabulary_fixture(2, DESCENDING,
+                                   sizeof DESCENDING) == NULL,
+           "tokenizer rejects descending saved bytes");
+    expect(read_vocabulary_fixture(2, DUPLICATE,
+                                   sizeof DUPLICATE) == NULL,
+           "tokenizer rejects duplicate saved bytes");
+    expect(read_vocabulary_fixture(2, SHORT_BODY,
+                                   sizeof SHORT_BODY) == NULL,
+           "tokenizer rejects a short saved vocabulary");
+    expect(read_vocabulary_fixture(0, HIGH_BYTES, 0) == NULL,
+           "tokenizer rejects a zero saved vocabulary count");
+    expect(read_vocabulary_fixture(257, HIGH_BYTES, 0) == NULL,
+           "tokenizer rejects an oversized saved vocabulary count");
+
+    Tokenizer *high = read_vocabulary_fixture(4, HIGH_BYTES,
+                                              sizeof HIGH_BYTES);
+
+    expect(high != NULL && tokenizer_vocab_size(high) == 4,
+           "tokenizer accepts canonical unsigned high bytes");
+    if (high != NULL) {
+        for (int id = 0; id < 4; id++)
+            expect((unsigned char)tokenizer_decode(high, id)
+                       == HIGH_BYTES[id],
+                   "tokenizer preserves unsigned high-byte ids");
+        tokenizer_free(high);
     }
     tokenizer_free(tk);
 }
@@ -1255,8 +1376,10 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    if (strcmp(group, "all") == 0 || strcmp(group, "foundations") == 0)
+    if (strcmp(group, "all") == 0 || strcmp(group, "foundations") == 0) {
+        check_file_slurp();
         check_rng();
+    }
     if (strcmp(group, "all") == 0 || strcmp(group, "data") == 0) {
         check_tokenizer();
         check_dataset();

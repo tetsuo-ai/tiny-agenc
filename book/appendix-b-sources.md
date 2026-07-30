@@ -545,8 +545,10 @@ The
 the compiler directives and runtime calls used in `ops.c` and `main.c`.
 The
 [POSIX.1-2017 specification](https://pubs.opengroup.org/onlinepubs/9699919799/)
-defines interfaces such as `clock_gettime`, `fseeko`, `fsync`, and
-`rename`.
+defines interfaces such as `clock_gettime`, `fseeko`, `fsync`,
+`openat`, and `renameat`. The Linux manual pages define the xattr and
+`getrandom` calls used at the checkpoint boundary. The libacl manual
+defines the access-ACL objects copied between open file descriptors.
 
 These documents answer exact interface questions. They do not begin
 with Tiny's problem or arithmetic floor. Read Chapter 5's [first
@@ -560,10 +562,12 @@ before POSIX.
 The source remains the final witness for which part of a standard Tiny
 uses. OpenMP defines its directives; the surrounding loop determines
 whether independent iterations make parallel execution safe. POSIX
-defines what `fsync` and `rename` do; `model_save` determines their
-order. Tiny synchronizes the temporary file before renaming it, but
-does not synchronize the parent directory. Chapter 13 therefore claims
-atomic runtime replacement, not universal power-loss durability.
+defines what `fsync` and `renameat` do; `model_save_durable` determines
+their order. Tiny synchronizes the completed temporary inode, renames
+it over the destination, and then synchronizes the parent directory.
+Chapter 13 separates a failure before rename from a failure of that
+last directory synchronization because only the second occurs after
+the new file is visible.
 
 Stop when you can separate the interface guarantee supplied by a
 standard from the call order and narrower guarantee supplied by Tiny's

@@ -109,7 +109,7 @@ roles carry into another implementation and which choices belong to
 this one. Ours is small: 815,360 parameters instead of billions or
 more.
 
-And it is written in about 2,700 lines of implementation C, plus
+And it is written in about 3,600 lines of implementation C, plus
 small headers. It calls no PyTorch, NumPy, or BLAS, and no library
 computes the parameter changes for it. Underneath are explicit memory
 requests, ordinary loops, and a small set of math functions. Each C
@@ -126,12 +126,13 @@ generated stdout is
 Better: the finished machine is in this repository, next to
 `tiny-agenc.bin`, a saved-model file.
 [Chapter 13](13-durable-checkpoints.md) builds and names that kind of
-file a **checkpoint**. The reference environment is GNU/Linux with
-GNU Make, a C11 compiler, `libm` (the C math library), and the corpus
-tools listed in the [book quickstart](README.md#quickstart). OpenMP is
-optional; the serial fallback is under Common failures below. From the
-repository root, build the reference executable and make it talk before
-reading a single equation:
+file a **checkpoint**. The reference environment is GNU/Linux with GNU
+Make, a C11 compiler, `libm` (the C math library), the `libacl`
+development package, and the corpus tools listed in the
+[book quickstart](README.md#quickstart). OpenMP is optional; the serial
+fallback is under Common failures below. From the repository root,
+build the reference executable and make it talk before reading a single
+equation:
 
 ```sh
 make

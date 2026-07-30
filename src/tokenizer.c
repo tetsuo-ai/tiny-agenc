@@ -75,38 +75,60 @@ int tokenizer_write(const Tokenizer *tk, FILE *stream)
     return 0;
 }
 
+static int read_vocabulary_size(FILE *stream, int32_t *vocab_size)
+{
+    if (read_i32(stream, vocab_size) != 0)
+        return -1;
+    if (*vocab_size < 1 || *vocab_size > BYTE_VALUES)
+        return -1;
+    return 0;
+}
+
+static int read_vocabulary_bytes(FILE *stream, char bytes[BYTE_VALUES],
+                                 int32_t vocab_size)
+{
+    return fread(bytes, 1, (size_t)vocab_size, stream)
+               == (size_t)vocab_size
+        ? 0 : -1;
+}
+
+static int vocabulary_is_canonical(const char bytes[BYTE_VALUES],
+                                   int32_t vocab_size)
+{
+    for (int32_t i = 1; i < vocab_size; i++) {
+        /* Weight rows use this serialized id order.  The writer emits
+         * ascending bytes, so accepting any other order would silently
+         * attach the loaded weights to different characters. */
+        if ((unsigned char)bytes[i - 1] >= (unsigned char)bytes[i])
+            return 0;
+    }
+    return 1;
+}
+
+static Tokenizer *from_canonical_vocabulary(const char bytes[BYTE_VALUES],
+                                            int32_t vocab_size)
+{
+    int seen[BYTE_VALUES] = { 0 };
+
+    for (int32_t i = 0; i < vocab_size; i++)
+        seen[(unsigned char)bytes[i]] = 1;
+    return from_seen_bytes(seen);
+}
+
 Tokenizer *tokenizer_read(FILE *stream)
 {
     int32_t vocab_size;
 
-    if (read_i32(stream, &vocab_size) != 0)
-        return NULL;
-    if (vocab_size < 1 || vocab_size > BYTE_VALUES)
+    if (read_vocabulary_size(stream, &vocab_size) != 0)
         return NULL;
 
     char bytes[BYTE_VALUES];
 
-    if (fread(bytes, 1, (size_t)vocab_size, stream) != (size_t)vocab_size)
+    if (read_vocabulary_bytes(stream, bytes, vocab_size) != 0)
         return NULL;
-
-    int seen[BYTE_VALUES] = { 0 };
-
-    for (int32_t i = 0; i < vocab_size; i++) {
-        /* Weight rows use this serialized id order.  The writer emits
-         * ascending bytes, so accepting any other order would silently
-         * attach the loaded weights to different characters. */
-        if (i > 0 && (unsigned char)bytes[i - 1] >= (unsigned char)bytes[i])
-            return NULL;
-        seen[(unsigned char)bytes[i]] = 1;
-    }
-
-    Tokenizer *tk = from_seen_bytes(seen);
-
-    if (tk->vocab_size != vocab_size) {   /* duplicate bytes: corrupt file */
-        tokenizer_free(tk);
+    if (!vocabulary_is_canonical(bytes, vocab_size))
         return NULL;
-    }
-    return tk;
+    return from_canonical_vocabulary(bytes, vocab_size);
 }
 
 void tokenizer_free(Tokenizer *tk)

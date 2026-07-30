@@ -1,6 +1,7 @@
 /*
  * Chapter 13 witness: the new TAGC checkpoint is exact, checksummed,
- * resource-bounded, and intentionally incompatible with the old magic.
+ * durably committed, resource-bounded, and intentionally incompatible
+ * with the old magic.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -146,22 +147,38 @@ int main(void)
     static const char TEXT[] = "\nabcabcabc\n";
     char path[] = "/tmp/tiny-agenc-check13-XXXXXX";
     char resource_path[] = "/tmp/tiny-agenc-check13-resource-XXXXXX";
+    char link_path[] = "/tmp/tiny-agenc-check13-link-XXXXXX";
     int descriptor = mkstemp(path);
     int resource_descriptor = mkstemp(resource_path);
+    int link_descriptor = mkstemp(link_path);
 
-    expect(descriptor >= 0 && resource_descriptor >= 0,
+    expect(descriptor >= 0 && resource_descriptor >= 0
+           && link_descriptor >= 0,
            "checkpoint fixtures reserve paths");
     if (descriptor >= 0)
         close(descriptor);
     if (resource_descriptor >= 0)
         close(resource_descriptor);
+    if (link_descriptor >= 0) {
+        close(link_descriptor);
+        remove(link_path);
+    }
 
     Tokenizer *tokenizer = tokenizer_new(TEXT, sizeof TEXT - 1);
     ModelConfig config = { 4, 4, 8, 2, 1, 2 };
     Model *model = model_new(config, 91);
 
-    expect(model_save(model, tokenizer, path) == 0,
-           "TAGC checkpoint saves atomically");
+    expect(model_save_durable(model, tokenizer, path)
+           == MODEL_SAVE_DURABLE,
+           "TAGC checkpoint confirms file and directory durability");
+    expect(symlink(path, link_path) == 0,
+           "non-regular destination fixture creates a symbolic link");
+    expect(model_save_durable(model, tokenizer, link_path)
+           == MODEL_SAVE_NOT_COMMITTED,
+           "save rejects a symbolic-link destination before commit");
+    expect(model_save_durable(NULL, tokenizer, path)
+           == MODEL_SAVE_NOT_COMMITTED,
+           "invalid save input reports that nothing was committed");
 
     Tokenizer *loaded_tokenizer = NULL;
     Model *loaded = model_load(&loaded_tokenizer, path);
@@ -247,6 +264,7 @@ int main(void)
     tokenizer_free(tokenizer);
     remove(path);
     remove(resource_path);
+    remove(link_path);
 
     if (failures != 0) {
         fprintf(stderr, "check-13: %d of %d checks failed\n",
