@@ -57,23 +57,32 @@ static void check_embedding(void)
 
 static void check_layernorm(void)
 {
-    float input[] = { 1.0f, 2.0f, 3.0f };
+    float input[] = {
+          1.0f,   2.0f,   3.0f,
+        100.0f, 102.0f, 104.0f,
+    };
     float gain[] = { 2.0f, -1.0f, 0.5f };
     float bias[] = { 0.25f, 1.0f, -2.0f };
-    float output[3] = { 0 };
-    float mean = 0.0f;
-    float rstd = 0.0f;
+    float output[6] = { 0 };
+    float means[2] = { 0 };
+    float rstds[2] = { 0 };
 
-    layernorm_forward(mat_make(output, 1, 3), &mean, &rstd,
-                      mat_make(input, 1, 3), gain, bias);
+    layernorm_forward(mat_make(output, 2, 3), means, rstds,
+                      mat_make(input, 2, 3), gain, bias);
 
-    expect(mean == 2.0f, "layernorm records the row mean");
-    expect(rstd > 1.22f && rstd < 1.23f,
-           "layernorm records the reciprocal standard deviation");
+    expect(means[0] == 2.0f, "layernorm records the first row mean");
+    expect(means[1] == 102.0f, "layernorm records the second row mean");
+    expect(rstds[0] > 1.22f && rstds[0] < 1.23f
+           && rstds[1] > 0.61f && rstds[1] < 0.62f,
+           "layernorm records each row's reciprocal standard deviation");
     expect(close_float(output[0], -2.19947f, 1e-5f)
            && close_float(output[1], 1.0f, 1e-6f)
            && close_float(output[2], -1.38763f, 1e-5f),
-           "layernorm applies learned gain and bias after normalization");
+           "layernorm transforms the first row");
+    expect(close_float(output[3], -2.19948f, 1e-5f)
+           && close_float(output[4], 1.0f, 1e-6f)
+           && close_float(output[5], -1.38763f, 1e-5f),
+           "layernorm transforms the second row from its own spread");
 }
 
 static void check_matmul(void)

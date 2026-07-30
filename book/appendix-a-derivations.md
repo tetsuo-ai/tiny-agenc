@@ -359,41 +359,50 @@ d_weights[o,k]
     += sum over r of d_out[r,o] * x[r,k]
 ```
 
-Those are the two source loops:
+Those are the two row stages and their public loops:
 
 ```c
+static void matmul_accumulate_input_row(Mat d_x, Mat d_out, Mat weights,
+                                        int row)
+{
+    const float *d_output = mat_row(d_out, row);
+    float       *d_input  = mat_row(d_x, row);
+
+    for (int o = 0; o < weights.rows; o++)
+        add_scaled(d_input, d_output[o], mat_row(weights, o), weights.cols);
+}
+
+static void matmul_accumulate_weight_row(Mat d_weights, Mat d_out, Mat x,
+                                         Mat weights, int output)
+{
+    float *d_neuron = mat_row(d_weights, output);
+
+    for (int row = 0; row < x.rows; row++) {
+        const float *d_output = mat_row(d_out, row);
+
+        add_scaled(d_neuron, d_output[output], mat_row(x, row), weights.cols);
+    }
+}
+
 void matmul_backward(Mat d_x, Mat d_weights, Mat d_out, Mat x, Mat weights)
 {
     /* d_x[r] += sum_o d_out[r][o] * weights[o]: rows are independent. */
     #pragma omp parallel for if(x.rows >= PARALLEL_THRESHOLD)
-    for (int row = 0; row < x.rows; row++) {
-        const float *d_output = mat_row(d_out, row);
-        float       *d_input  = mat_row(d_x, row);
-
-        for (int o = 0; o < weights.rows; o++)
-            add_scaled(d_input, d_output[o], mat_row(weights, o), weights.cols);
-    }
+    for (int row = 0; row < x.rows; row++)
+        matmul_accumulate_input_row(d_x, d_out, weights, row);
 
     /* d_weights[o] += sum_r d_out[r][o] * x[r]: output channels are
      * independent, so this loop parallelizes without collisions. */
     #pragma omp parallel for if(weights.rows >= PARALLEL_THRESHOLD)
-    for (int o = 0; o < weights.rows; o++) {
-        float *d_neuron = mat_row(d_weights, o);
-
-        for (int row = 0; row < x.rows; row++) {
-            const float *d_output = mat_row(d_out, row);
-
-            add_scaled(d_neuron, d_output[o], mat_row(x, row), weights.cols);
-        }
-    }
+    for (int o = 0; o < weights.rows; o++)
+        matmul_accumulate_weight_row(d_weights, d_out, x, weights, o);
 }
 ```
 
-The first outer iteration owns one `d_x` row. Each output channel adds
-its arriving rate times one weight row. The second outer iteration owns
-one `d_weights` row. It walks all input rows that used that output
-channel. Those ownership choices let OpenMP run outer iterations
-together without two threads writing the same destination.
+The first helper owns one `d_x` row. Each output channel adds its
+arriving rate times one weight row. The second owns one `d_weights`
+row and walks every input row that used that output channel. The
+public loops assign those independent rows to OpenMP iterations.
 
 The backward function does not repeat forward's shape assertions. The
 caller must supply:
@@ -1219,48 +1228,108 @@ The source locals map one for one:
 | `mean(g ⊙ norm)` | `d_norm_norm_mean` |
 | `rstd` | `rstds[row]` |
 
-The complete function is:
+The following shortened excerpt joins the backward records and row
+stages. Forward-only layernorm code between these pieces in `ops.c` is
+omitted:
 
 ```c
+typedef struct {
+    Mat          d_x;
+    float       *d_gain;
+    float       *d_bias;
+    Mat          d_out;
+    Mat          x;
+    const float *gain;
+    const float *means;
+    const float *rstds;
+} LayernormBackward;
+
+typedef struct {
+    const float *input;
+    const float *d_output;
+    float       *d_input;
+    float       *d_gain;
+    float       *d_bias;
+    const float *gain;
+    int          channels;
+    float        mean;
+    float        rstd;
+} LayernormBackwardRow;
+
+typedef struct {
+    float d_norm_mean;
+    float d_norm_norm_mean;
+} LayernormGradientMeans;
+
+static LayernormGradientMeans
+layernorm_gradient_means(const LayernormBackwardRow *row)
+{
+    LayernormGradientMeans means = { 0.0f, 0.0f };
+
+    for (int c = 0; c < row->channels; c++) {
+        float norm   = (row->input[c] - row->mean) * row->rstd;
+        float d_norm = row->d_output[c] * row->gain[c];
+
+        means.d_norm_mean      += d_norm;
+        means.d_norm_norm_mean += d_norm * norm;
+    }
+    means.d_norm_mean      /= (float)row->channels;
+    means.d_norm_norm_mean /= (float)row->channels;
+    return means;
+}
+
+static void layernorm_accumulate_row_gradients(
+    const LayernormBackwardRow *row, LayernormGradientMeans means)
+{
+    for (int c = 0; c < row->channels; c++) {
+        float norm   = (row->input[c] - row->mean) * row->rstd;
+        float d_norm = row->d_output[c] * row->gain[c];
+
+        row->d_input[c] +=
+            row->rstd
+            * (d_norm - means.d_norm_mean
+               - norm * means.d_norm_norm_mean);
+        row->d_gain[c] += row->d_output[c] * norm;
+        row->d_bias[c] += row->d_output[c];
+    }
+}
+
+static void layernorm_backward_row(const LayernormBackward *backward,
+                                   int row)
+{
+    LayernormBackwardRow backward_row = {
+        mat_row(backward->x, row),
+        mat_row(backward->d_out, row),
+        mat_row(backward->d_x, row),
+        backward->d_gain,
+        backward->d_bias,
+        backward->gain,
+        backward->x.cols,
+        backward->means[row],
+        backward->rstds[row],
+    };
+    LayernormGradientMeans means =
+        layernorm_gradient_means(&backward_row);
+
+    layernorm_accumulate_row_gradients(&backward_row, means);
+}
+
 void layernorm_backward(Mat d_x, float *d_gain, float *d_bias, Mat d_out,
                         Mat x, const float *gain,
                         const float *means, const float *rstds)
 {
-    for (int row = 0; row < x.rows; row++) {
-        const float *input    = mat_row(x, row);
-        const float *d_output = mat_row(d_out, row);
-        float       *d_input  = mat_row(d_x, row);
-        float        mean     = means[row];
-        float        rstd     = rstds[row];
+    LayernormBackward backward =
+        { d_x, d_gain, d_bias, d_out, x, gain, means, rstds };
 
-        float d_norm_mean      = 0.0f;
-        float d_norm_norm_mean = 0.0f;
-        for (int c = 0; c < x.cols; c++) {
-            float norm   = (input[c] - mean) * rstd;
-            float d_norm = d_output[c] * gain[c];
-
-            d_norm_mean      += d_norm;
-            d_norm_norm_mean += d_norm * norm;
-        }
-        d_norm_mean      /= (float)x.cols;
-        d_norm_norm_mean /= (float)x.cols;
-
-        for (int c = 0; c < x.cols; c++) {
-            float norm   = (input[c] - mean) * rstd;
-            float d_norm = d_output[c] * gain[c];
-
-            d_input[c] += rstd * (d_norm - d_norm_mean - norm * d_norm_norm_mean);
-            d_gain[c]  += d_output[c] * norm;
-            d_bias[c]  += d_output[c];
-        }
-    }
+    for (int row = 0; row < x.rows; row++)
+        layernorm_backward_row(&backward, row);
 }
 ```
 
-The first channel loop reconstructs `norm` and `d_norm`, then turns
-their sums into means. The second reconstructs the same two locals and
-applies the three returning routes. The gain and bias writes also occur
-there.
+The gradient-means stage reconstructs `norm` and `d_norm`, then turns
+their sums into means. The accumulation stage reconstructs the same
+two locals and applies the three returning routes. The row coordinator
+binds one row to its saved statistics before it runs those stages.
 
 The row loop stays serial because every row adds into the same gain and
 bias destinations. Chapter 6 first walks the
@@ -1505,7 +1574,7 @@ softmax weights, not pre-softmax scores. During backward,
 `d_score`. The source then writes:
 
 ```c
-float d_raw = scale * d_weights[t2];
+float d_raw = position->scale * position->d_weights[t2];
 ```
 
 Despite the local name, this value is the coefficient called `d_dot`
@@ -1816,8 +1885,10 @@ make OPENMP=0 check
 
 [`tests/gradcheck.c`](../tests/gradcheck.c) checks residual, embedding,
 matmul, GELU, softmax through attention, cross-entropy, and layernorm
-against measured finite differences. Its AdamW case compares several
-updates with an independent double-precision transcription, the
+against measured finite differences. It also checks additive
+destinations from nonzero starting values and preserves sentinels
+outside attention's causal scratch prefixes. Its AdamW case compares
+several updates with an independent double-precision transcription, the
 [different optimizer
 witness](08-adamw.md#why-the-optimizer-needs-a-different-witness)
 Chapter 8 constructs.

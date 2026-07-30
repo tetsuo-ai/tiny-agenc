@@ -608,101 +608,229 @@ The learning rate and decay may be zero. Each beta includes zero but
 not one. Epsilon must be positive. Every setting must be finite.
 The `finite_float` helper above supplies each finite-value test.
 
-The following source-exact shortened portion of
-`param_adamw_step` computes its two corrections:
+The corrections, shape-selected decay, and bounds are the same for
+every entry. Passing each one as a separate helper argument would make
+it easy to swap two values. Recomputing them inside the entry loop
+would do needless work. The source gives the values one private
+record:
 
 ```c
-float correction1 = 1.0f - powf(opt.beta1, (float)step);
-float correction2 = 1.0f - powf(opt.beta2, (float)step);
-
-if (!finite_float(correction1) || correction1 <= 0.0f
-    || !finite_float(correction2) || correction2 <= 0.0f)
-    return -1;
+typedef struct {
+    AdamW  opt;
+    size_t count;
+    float  correction1;
+    float  correction2;
+    float  decay;
+    double safe;
+    double inverse_correction1;
+    double inverse_correction2;
+    double inverse_epsilon;
+} PreparedAdamW;
 ```
 
-`powf(base, exponent)` is the float version of raising a number to a
-power. The cast supplies `step` in the float type that `powf` expects.
-The range check refuses a correction that rounded to zero or became
-nonfinite. The omitted surrounding lines compute `count` and the
-shape-selected decay.
+`opt` is the checked recipe. `count` is the number of entries. The
+next three floats are the two bias corrections and the selected
+decay. The four doubles belong only to the conservative arithmetic
+proof. `PreparedAdamW` is the prepared step record, one read-only
+bundle shared by the scan and the later update.
 
-A later entry could still contain a nonfinite value or history. If the
-function changed entry zero before discovering that bad entry, one
-`Param` would be left half updated. The source therefore separates a
-read-only preflight from the commit loop.
-
-The preflight recomputes each candidate moment and checks it:
+This source-exact helper constructs it:
 
 ```c
-float gradient = p->gradient[i];
-float first = opt.beta1 * p->first_moment[i]
-            + (1.0f - opt.beta1) * gradient;
-float second = opt.beta2 * p->second_moment[i]
-             + (1.0f - opt.beta2) * gradient * gradient;
+static int adamw_prepare(PreparedAdamW *prepared, const Param *p,
+                         AdamW opt, int step)
+{
+    if (!param_adamw_recipe_valid(opt, step))
+        return 0;
 
-if (!finite_float(gradient) || !finite_float(p->values.vals[i])
-    || !finite_float(p->first_moment[i])
-    || !finite_float(p->second_moment[i])
-    || p->second_moment[i] < 0.0f
-    || !finite_float(first) || !finite_float(second)
-    || second < 0.0f
-    || fabs((double)first) > safe
-    || (double)second > safe)
-    return 0;
-```
+    prepared->opt = opt;
+    prepared->count = mat_size(p->values);
+    prepared->decay = is_matrix(p) ? opt.weight_decay : 0.0f;
+    prepared->correction1 = 1.0f - powf(opt.beta1, (float)step);
+    prepared->correction2 = 1.0f - powf(opt.beta2, (float)step);
 
-This is a source-exact portion of `adamw_inputs_valid`; the remaining
-lines bound the correction, division, decay, and final subtraction.
-`<float.h>` supplies `FLT_MAX`, the largest finite `float`. The
-function sets `safe` to `FLT_MAX / 4` and performs conservative bound
-arithmetic in `double`. It is proving that the original float commit
-will stay finite, not changing the ordinary update to double.
-
-The four stored-state checks reject a nonfinite gradient, value, or
-old history. A squared-gradient history cannot be negative, so the two
-`< 0.0f` checks reject either corrupt stored state or an invalid
-candidate. Casting `first` to `double` makes `fabs` compute its
-absolute value in double precision; Chapter 7's `fabsf` was the float
-version. Returning zero means this private validity helper found a bad
-entry.
-
-The public updater converts that private result to its `-1` failure
-contract with this exact check:
-
-```c
-if (!adamw_inputs_valid(p, opt, correction1, correction2, decay))
-    return -1;
-```
-
-Logical `!` turns the helper's zero into true, so the public function
-returns before reaching its commit loop.
-
-Only after every entry passes does the source run this exact commit
-loop:
-
-```c
-for (size_t i = 0; i < count; i++) {
-    float gradient = p->gradient[i];
-
-    p->first_moment[i]  = opt.beta1 * p->first_moment[i]
-                        + (1.0f - opt.beta1) * gradient;
-    p->second_moment[i] = opt.beta2 * p->second_moment[i]
-                        + (1.0f - opt.beta2) * gradient * gradient;
-
-    float smoothed = p->first_moment[i] / correction1;
-    float spread   = sqrtf(p->second_moment[i] / correction2);
-
-    p->values.vals[i] -= opt.learning_rate
-                       * (smoothed / (spread + opt.epsilon)
-                          + decay * p->values.vals[i]);
+    if (!adamw_corrections_valid(prepared))
+        return 0;
+    prepared->safe = (double)FLT_MAX / 4.0;
+    prepared->inverse_correction1 = 1.0 / (double)prepared->correction1;
+    prepared->inverse_correction2 = 1.0 / (double)prepared->correction2;
+    prepared->inverse_epsilon = 1.0 / (double)prepared->opt.epsilon;
+    return 1;
 }
 ```
 
-Each iteration reads one gradient, updates its two histories, corrects
+The first guard checks the public recipe before filling the record.
+The next five assignments copy the recipe, count the entries, choose
+the decay, and compute both corrections. `powf(base, exponent)` is the
+float version of raising a number to a power. The cast supplies `step`
+in the float type that `powf` expects.
+
+The correction helper accepts two finite positive values:
+
+```c
+static int adamw_corrections_valid(const PreparedAdamW *step)
+{
+    return finite_float(step->correction1) && step->correction1 > 0.0f
+        && finite_float(step->correction2) && step->correction2 > 0.0f;
+}
+```
+
+A correction that rounded to zero or became nonfinite stops
+preparation. Only after that check does `adamw_prepare` divide by the
+corrections and epsilon. `<float.h>` supplies `FLT_MAX`, the largest
+finite `float`; one quarter of it is the proof's conservative ceiling.
+
+A later entry could still contain a nonfinite value or history. If the
+function changed entry zero before discovering that bad entry, one
+`Param` would be left half updated. The source therefore scans every
+entry without writing to the `Param`.
+
+Two small helpers check stored state and the candidate moments:
+
+```c
+static int adamw_stored_entry_valid(const Param *p, size_t i,
+                                    float gradient)
+{
+    return finite_float(gradient) && finite_float(p->values.vals[i])
+        && finite_float(p->first_moment[i])
+        && finite_float(p->second_moment[i])
+        && p->second_moment[i] >= 0.0f;
+}
+
+static int adamw_candidate_moments_valid(const PreparedAdamW *step,
+                                         float first, float second)
+{
+    return finite_float(first) && finite_float(second) && second >= 0.0f
+        && fabs((double)first) <= step->safe
+        && (double)second <= step->safe;
+}
+```
+
+The first rejects a nonfinite gradient, value, or old history. A
+squared-gradient history cannot be negative. The second applies the
+same checks to the two moments that this step would produce and keeps
+their magnitudes below the prepared ceiling. Casting `first` to
+`double` makes `fabs` compute its absolute value in double precision;
+Chapter 7's `fabsf` was the float version.
+
+The next helper proves that correction, division, decay, and the final
+subtraction stay within that ceiling:
+
+```c
+static int adamw_update_bounds_valid(const Param *p,
+                                     const PreparedAdamW *step, size_t i,
+                                     float first, float second)
+{
+    double variance_bound = (double)second * step->inverse_correction2;
+    double smoothed_bound =
+        fabs((double)first) * step->inverse_correction1;
+    double ratio_bound = smoothed_bound * step->inverse_epsilon;
+    double decay_bound =
+        (double)step->decay * fabs((double)p->values.vals[i]);
+    double direction_bound = ratio_bound + decay_bound;
+    double change_bound =
+        (double)step->opt.learning_rate * direction_bound;
+
+    return (double)step->opt.epsilon <= step->safe / 2.0
+        && variance_bound <= step->safe
+        && smoothed_bound <= step->safe
+        && ratio_bound <= step->safe
+        && decay_bound <= step->safe
+        && direction_bound <= step->safe
+        && change_bound <= step->safe
+        && fabs((double)p->values.vals[i]) + change_bound <= step->safe;
+}
+```
+
+Each local variable bounds the next operation in source order:
+corrected variance, corrected first moment, division by epsilon,
+decay, their sum, and the learning-rate-scaled change. The final test
+also includes the old value. These double calculations prove that the
+original float update will stay finite. They do not replace that
+update with double arithmetic.
+
+The complete read-only scan is now a short coordinator:
+
+```c
+static int adamw_inputs_valid(const Param *p, const PreparedAdamW *step)
+{
+    for (size_t i = 0; i < step->count; i++) {
+        float gradient = p->gradient[i];
+        float first = step->opt.beta1 * p->first_moment[i]
+                    + (1.0f - step->opt.beta1) * gradient;
+        float second = step->opt.beta2 * p->second_moment[i]
+                     + (1.0f - step->opt.beta2) * gradient * gradient;
+
+        if (!adamw_stored_entry_valid(p, i, gradient)
+            || !adamw_candidate_moments_valid(step, first, second)
+            || !adamw_update_bounds_valid(p, step, i, first, second))
+            return 0;
+    }
+    return 1;
+}
+```
+
+The loop computes the exact candidate moments for one entry, then
+asks the three helpers about stored state, candidate state, and update
+bounds. Logical `||` returns failure when any check fails. Reaching
+the final `return 1` means every entry passed and nothing in the
+`Param` changed.
+
+Only then may one entry commit:
+
+```c
+static void adamw_apply_entry(Param *p, const PreparedAdamW *step, size_t i)
+{
+    float gradient = p->gradient[i];
+
+    p->first_moment[i]  = step->opt.beta1 * p->first_moment[i]
+                        + (1.0f - step->opt.beta1) * gradient;
+    p->second_moment[i] = step->opt.beta2 * p->second_moment[i]
+                        + (1.0f - step->opt.beta2) * gradient * gradient;
+
+    float smoothed = p->first_moment[i] / step->correction1;
+    float spread   = sqrtf(p->second_moment[i] / step->correction2);
+
+    p->values.vals[i] -= step->opt.learning_rate
+                       * (smoothed / (spread + step->opt.epsilon)
+                          + step->decay * p->values.vals[i]);
+}
+```
+
+The helper reads one gradient, updates its two histories, corrects
 them, and then changes the matching value. `sqrtf` restores the scale
 of the squared-gradient history. Epsilon is outside that square root.
 Decay is outside the adaptive fraction but still multiplied by the
 learning rate. The gradient is not cleared here.
+
+The commit loop has one job and preserves ascending entry order:
+
+```c
+static void adamw_apply(Param *p, const PreparedAdamW *step)
+{
+    for (size_t i = 0; i < step->count; i++)
+        adamw_apply_entry(p, step, i);
+}
+```
+
+The public function now shows the whole transaction:
+
+```c
+int param_adamw_step(Param *p, AdamW opt, int step)
+{
+    PreparedAdamW prepared;
+
+    if (!adamw_prepare(&prepared, p, opt, step)
+        || !adamw_inputs_valid(p, &prepared))
+        return -1;
+    adamw_apply(p, &prepared);
+    return 0;
+}
+```
+
+Preparation and the complete scan both precede the only call that can
+mutate the `Param`. A failure returns `-1`; a successful commit returns
+zero.
 
 `param_adamw_step` is all-or-nothing for this one `Param`: invalid
 input returns before any entry commits. That guarantee does not extend
@@ -853,7 +981,11 @@ advance, and compares the resulting values. It runs one `2 x 3`
 matrix with decay and one `1 x 3` row without decay. Separate checks
 exercise zeroing, scaling, value-only I/O, invalid shapes, invalid
 recipes, nonfinite input, and a later unsafe entry that must prevent
-an earlier entry from moving.
+an earlier entry from moving. The witness then repairs that unsafe
+entry and compares its next update with an untouched control. The
+comparison would fail if a rejected attempt had committed candidate
+moments that changed the next update. The read-only source scan
+establishes the stronger claim that neither moment array is written.
 
 Predict what would happen if both the implementation and its witness
 folded decay into the adaptive gradient. They could agree with each
@@ -881,12 +1013,13 @@ make -C labs check-08
 # answer key: make check-optimizer
 ```
 
-**Expected.** Several steps agree with an independent double-precision
-reference. A `2 x 3` matrix decays and a `1 x 3` row does not.
-Gradient zeroing and uniform scaling affect every entry without
-changing shape. Finite parameter values round-trip bit for bit, short
-reads fail, and nonfinite writes are rejected. Nonpositive shapes
-return `NULL`; the constructor code also guards
+**Expected.** The lab prints
+`check-08: all 44 optimizer checks passed`. Several steps agree with an
+independent double-precision reference. A `2 x 3` matrix decays and a
+`1 x 3` row does not. Gradient zeroing and uniform scaling affect every
+entry without changing shape. Finite parameter values round-trip bit
+for bit, short reads fail, and nonfinite writes are rejected.
+Nonpositive shapes return `NULL`; the constructor code also guards
 unrepresentable shape arithmetic, though this chapter's two advertised
 commands do not exercise that separate case. Invalid recipes and
 unsafe candidate arithmetic leave one `Param`'s values and histories

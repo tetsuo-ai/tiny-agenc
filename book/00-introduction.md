@@ -109,7 +109,7 @@ roles carry into another implementation and which choices belong to
 this one. Ours is small: 815,360 parameters instead of billions or
 more.
 
-And it is written in about 3,600 lines of implementation C, plus
+And it is written in about 3,900 lines of implementation C, plus
 small headers. It calls no PyTorch, NumPy, or BLAS, and no library
 computes the parameter changes for it. Underneath are explicit memory
 requests, ordinary loops, and a small set of math functions. Each C

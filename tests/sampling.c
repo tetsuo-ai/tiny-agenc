@@ -1,8 +1,8 @@
 /*
  * Sampling witness: generation fills every requested position, a
- * seeded categorical draw follows a known uniform distribution,
- * temperature changes a nonuniform draw, and an evicted context uses
- * the freshest block.
+ * seeded categorical draw follows a known uniform distribution, a
+ * one-id vocabulary still consumes one draw, temperature changes a
+ * nonuniform draw, and an evicted context uses the freshest block.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -109,6 +109,33 @@ static void check_uniform_generation(void)
     model_free(model);
 }
 
+static void check_one_id_consumes_one_draw(void)
+{
+    ModelConfig config = {
+        .vocab_size  = 1,
+        .block_size  = 1,
+        .d_model     = 1,
+        .head_count  = 1,
+        .layer_count = 1,
+        .batch_size  = 1,
+    };
+    Model *model = model_new(config, 17);
+    int ids[2] = { 0, -1 };
+    Rng *actual_rng = rng_new(777);
+    Rng *expected_rng = rng_new(777);
+
+    (void)rng_uniform(expected_rng);
+    model_sample(model, actual_rng, ids, 1, 2, 0.8f);
+
+    expect(ids[1] == 0, "a one-id vocabulary can only select id zero");
+    expect(rng_uniform(actual_rng) == rng_uniform(expected_rng),
+           "a one-id vocabulary still consumes exactly one uniform draw");
+
+    rng_free(actual_rng);
+    rng_free(expected_rng);
+    model_free(model);
+}
+
 static Model *controlled_model(void)
 {
     enum {
@@ -204,6 +231,7 @@ static void check_fresh_context(void)
 int main(void)
 {
     check_uniform_generation();
+    check_one_id_consumes_one_draw();
     check_temperature();
     check_fresh_context();
 

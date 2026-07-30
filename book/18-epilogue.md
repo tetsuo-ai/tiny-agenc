@@ -371,7 +371,7 @@ grade back to every learned value. Finite differences compare the
 implemented return with measured slopes; the source walk establishes
 the intended route.
 
-The complete implementation fits in about 3,600 lines of C, excluding
+The complete implementation fits in about 3,900 lines of C, excluding
 headers and tests. Smallness is not the claim that larger systems are
 the same. It gave you one chance to see every shape, pointer, loop,
 gradient, ownership boundary, and witness together.

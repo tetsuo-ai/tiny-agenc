@@ -50,6 +50,15 @@ static void compare(const char *label, float analytic, float numeric)
     failures++;
 }
 
+static void expect(int condition, const char *label)
+{
+    checks++;
+    if (condition)
+        return;
+    printf("FAIL %s\n", label);
+    failures++;
+}
+
 /*
  * The driver: `measure` runs an op's forward pass and returns the
  * scalar loss.  nudge_all wiggles every element of `target` and holds
@@ -97,6 +106,19 @@ static float projected(Mat out, Mat u)
     return sum;
 }
 
+static void fill(Mat matrix, float value)
+{
+    for (size_t i = 0; i < mat_size(matrix); i++)
+        matrix.vals[i] = value;
+}
+
+static void check_accumulated(const char *label, Mat actual,
+                              Mat contribution, float initial)
+{
+    for (size_t i = 0; i < mat_size(actual); i++)
+        compare(label, actual.vals[i], initial + contribution.vals[i]);
+}
+
 /* -------- per-op checks -------- */
 
 typedef struct {
@@ -139,6 +161,26 @@ static void check_matmul(Rng *rng)
     free(d_x.vals); free(d_w.vals);
 }
 
+static void check_matmul_accumulation(void)
+{
+    float x_values[] = { 2.0f, -1.0f };
+    float weight_values[] = { 3.0f, 4.0f };
+    float d_output[] = { 5.0f };
+    float d_input[] = { 10.0f, 20.0f };
+    float d_weight[] = { 1.0f, 2.0f };
+
+    matmul_backward(mat_make(d_input, 1, 2),
+                    mat_make(d_weight, 1, 2),
+                    mat_make(d_output, 1, 1),
+                    mat_make(x_values, 1, 2),
+                    mat_make(weight_values, 1, 2));
+
+    expect(d_input[0] == 25.0f && d_input[1] == 40.0f,
+           "matmul adds into a nonzero input gradient");
+    expect(d_weight[0] == 11.0f && d_weight[1] == -3.0f,
+           "matmul adds into a nonzero weight gradient");
+}
+
 static float measure_layernorm(void *context)
 {
     Case *c = context;
@@ -164,6 +206,24 @@ static void check_layernorm(Rng *rng)
     measure_layernorm(&c);   /* fill means/rstds for the backward pass */
     layernorm_backward(d_x, d_gain.vals, d_bias.vals, c.u, c.x, c.gain.vals,
                        c.means, c.rstds);
+
+    Mat accumulated_x    = mat_new_zeros(ROWS, COLS);
+    Mat accumulated_gain = mat_new_zeros(1, COLS);
+    Mat accumulated_bias = mat_new_zeros(1, COLS);
+
+    fill(accumulated_x, 0.25f);
+    fill(accumulated_gain, -0.5f);
+    fill(accumulated_bias, 0.75f);
+    layernorm_backward(accumulated_x, accumulated_gain.vals,
+                       accumulated_bias.vals, c.u, c.x, c.gain.vals,
+                       c.means, c.rstds);
+    check_accumulated("layernorm accumulates d_x",
+                      accumulated_x, d_x, 0.25f);
+    check_accumulated("layernorm accumulates d_gain",
+                      accumulated_gain, d_gain, -0.5f);
+    check_accumulated("layernorm accumulates d_bias",
+                      accumulated_bias, d_bias, 0.75f);
+
     nudge_all("layernorm d_x", c.x, d_x, measure_layernorm, &c);
     nudge_all("layernorm d_gain", c.gain, d_gain, measure_layernorm, &c);
     nudge_all("layernorm d_bias", c.bias, d_bias, measure_layernorm, &c);
@@ -171,6 +231,9 @@ static void check_layernorm(Rng *rng)
     free(c.out.vals); free(c.u.vals); free(c.x.vals);
     free(c.gain.vals); free(c.bias.vals); free(c.means); free(c.rstds);
     free(d_x.vals); free(d_gain.vals); free(d_bias.vals);
+    free(accumulated_x.vals);
+    free(accumulated_gain.vals);
+    free(accumulated_bias.vals);
 }
 
 static float measure_attention(void *context)
@@ -184,6 +247,7 @@ static float measure_attention(void *context)
 static void check_attention(Rng *rng)
 {
     enum { SEQS = 2, TIME = 4, CHANNELS = 8, HEADS = 2, ROWS = SEQS * TIME };
+    static const float INVISIBLE_SENTINEL = 12345.0f;
     Case c = { .out    = mat_new_zeros(ROWS, CHANNELS),
                .u      = mat_new_gaussian(rng, ROWS, CHANNELS),
                .qkv    = mat_new_gaussian(rng, ROWS, QKV_STREAMS * CHANNELS),
@@ -193,12 +257,37 @@ static void check_attention(Rng *rng)
     Mat d_qkv    = mat_new_zeros(ROWS, QKV_STREAMS * CHANNELS);
     Mat d_scores = mat_new_zeros(SEQS * HEADS * TIME, TIME);
 
+    fill(d_scores, INVISIBLE_SENTINEL);
     measure_attention(&c);   /* fill scores for the backward pass */
     attention_backward(d_qkv, d_scores, c.u, c.qkv, c.scores, TIME, HEADS);
+
+    for (int seq = 0; seq < SEQS; seq++)
+        for (int head = 0; head < HEADS; head++)
+            for (int t = 0; t < TIME; t++) {
+                const float *d_score =
+                    mat_row(d_scores, (seq * HEADS + head) * TIME + t);
+
+                for (int t2 = t + 1; t2 < TIME; t2++)
+                    expect(d_score[t2] == INVISIBLE_SENTINEL,
+                           "attention leaves invisible d_scores untouched");
+            }
+
+    Mat accumulated_qkv =
+        mat_new_zeros(ROWS, QKV_STREAMS * CHANNELS);
+    Mat accumulated_scores =
+        mat_new_zeros(SEQS * HEADS * TIME, TIME);
+
+    fill(accumulated_qkv, 0.25f);
+    attention_backward(accumulated_qkv, accumulated_scores, c.u,
+                       c.qkv, c.scores, TIME, HEADS);
+    check_accumulated("attention accumulates d_qkv",
+                      accumulated_qkv, d_qkv, 0.25f);
+
     nudge_all("attention d_qkv", c.qkv, d_qkv, measure_attention, &c);
 
     free(c.out.vals); free(c.u.vals); free(c.qkv.vals); free(c.scores.vals);
     free(d_qkv.vals); free(d_scores.vals);
+    free(accumulated_qkv.vals); free(accumulated_scores.vals);
 }
 
 static float measure_gelu(void *context)
@@ -442,6 +531,7 @@ int main(int argc, char **argv)
 
     if (backward) {
         check_matmul(rng);
+        check_matmul_accumulation();
         check_layernorm(rng);
         check_attention(rng);
         check_gelu(rng);
