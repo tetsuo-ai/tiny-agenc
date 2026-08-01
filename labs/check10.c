@@ -12,6 +12,39 @@
 
 static int checks;
 static int failures;
+static const uint32_t FLOAT_EXPONENT_MASK = 0x7F800000u;
+enum {
+    PARAMETER_STORAGE_BUFFERS = 4,
+    TOKEN_CACHE_BUFFERS = 2,
+    NEXT_TOKEN_OFFSET = 1,
+};
+
+typedef struct {
+    const float *base;
+    size_t       next;
+    size_t       capacity;
+    const char  *name;
+} ArenaWalk;
+
+static void expect(int condition, const char *message);
+static void expect_named(int condition, const char *name,
+                         const char *property);
+static int finite_float(float value);
+static void walk_span(ArenaWalk *walk, const float *start, size_t count,
+                      const char *name);
+static void walk_mat(ArenaWalk *walk, Mat mat, int rows, int cols,
+                     const char *name);
+static void walk_block_tensors(ArenaWalk *walk, const BlockTensors *tensors,
+                               ModelConfig config);
+static void walk_value_arena(const Model *model, size_t capacity);
+static void walk_gradient_arena(const Model *model, size_t capacity);
+static void check_arena_layout(const Model *model, ModelMemory memory);
+static void check_whole_gradient_arena_clears(Model *model);
+static ModelConfig arena_test_config(void);
+static void check_full_capacity_view(Model *model, ModelConfig config);
+static void check_short_arena_view(Model *model);
+static void check_finite_model_gradients(const Model *model);
+int main(void);
 
 static void expect(int condition, const char *message)
 {
@@ -37,15 +70,8 @@ static int finite_float(float value)
     uint32_t bits;
 
     memcpy(&bits, &value, sizeof bits);
-    return (bits & 0x7F800000u) != 0x7F800000u;
+    return (bits & FLOAT_EXPONENT_MASK) != FLOAT_EXPONENT_MASK;
 }
-
-typedef struct {
-    const float *base;
-    size_t       next;
-    size_t       capacity;
-    const char  *name;
-} ArenaWalk;
 
 static void walk_span(ArenaWalk *walk, const float *start, size_t count,
                       const char *name)
@@ -101,7 +127,10 @@ static void walk_value_arena(const Model *model, size_t capacity)
     ModelConfig config = model->cfg;
     int rows = config.batch_size * config.block_size;
     ArenaWalk walk = {
-        model->values_arena, 0, capacity, "activation arena"
+        .base = model->values_arena,
+        .next = 0,
+        .capacity = capacity,
+        .name = "activation arena",
     };
 
     walk_mat(&walk, model->embedded, rows, config.d_model, "embedded");
@@ -129,7 +158,10 @@ static void walk_gradient_arena(const Model *model, size_t capacity)
     ModelConfig config = model->cfg;
     int rows = config.batch_size * config.block_size;
     ArenaWalk walk = {
-        model->gradient_arena, 0, capacity, "gradient arena"
+        .base = model->gradient_arena,
+        .next = 0,
+        .capacity = capacity,
+        .name = "gradient arena",
     };
 
     walk_mat(&walk, model->d_embedded, rows, config.d_model,
@@ -148,10 +180,11 @@ static void check_arena_layout(const Model *model, ModelMemory memory)
     size_t value_floats = memory.activation_bytes / sizeof(float);
     size_t gradient_floats = memory.gradient_bytes / sizeof(float);
     size_t parameter_bytes =
-        model_parameter_count(model) * 4 * sizeof(float);
+        model_parameter_count(model)
+        * PARAMETER_STORAGE_BUFFERS * sizeof(float);
     size_t token_bytes =
         (size_t)model->cfg.batch_size * (size_t)model->cfg.block_size
-        * 2 * sizeof(int);
+        * TOKEN_CACHE_BUFFERS * sizeof(int);
 
     expect(memory.activation_bytes % sizeof(float) == 0,
            "activation report contains whole floats");
@@ -185,17 +218,68 @@ static void check_whole_gradient_arena_clears(Model *model)
     expect(all_zero, "zeroing reaches every reported gradient arena float");
 }
 
-int main(void)
+static ModelConfig arena_test_config(void)
 {
-    enum { BATCH = 2, BLOCK = 4 };
     ModelConfig config = {
         .vocab_size  = 5,
-        .block_size  = BLOCK,
+        .block_size  = 4,
         .d_model     = 8,
         .head_count  = 2,
         .layer_count = 2,
-        .batch_size  = BATCH,
+        .batch_size  = 2,
     };
+
+    return config;
+}
+
+static void check_full_capacity_view(Model *model, ModelConfig config)
+{
+    int token_count = config.batch_size * config.block_size;
+    int inputs[token_count];
+    int targets[token_count];
+
+    for (int i = 0; i < token_count; i++) {
+        inputs[i] = i % config.vocab_size;
+        targets[i] = (i + NEXT_TOKEN_OFFSET) % config.vocab_size;
+    }
+
+    model_zero_gradients(model);
+    float loss = model_forward(model, inputs, targets,
+                               config.batch_size, config.block_size);
+    model_backward(model);
+    expect(finite_float(loss) && loss > 0.0f,
+           "full-capacity arena views complete forward and backward");
+}
+
+static void check_short_arena_view(Model *model)
+{
+    int inputs[] = { 0, 1, 2 };
+    int targets[] = { 1, 2, 3 };
+    int token_count = (int)(sizeof inputs / sizeof inputs[0]);
+
+    model_zero_gradients(model);
+    float loss = model_forward(model, inputs, targets, 1, token_count);
+    model_backward(model);
+    expect(finite_float(loss) && loss > 0.0f,
+           "short arena views reshape attention without stale capacity");
+}
+
+static void check_finite_model_gradients(const Model *model)
+{
+    ModelParams params = model_params(model);
+
+    for (int parameter = 0; parameter < params.count; parameter++) {
+        Mat gradient = param_gradient(params.params[parameter]);
+
+        for (size_t i = 0; i < mat_size(gradient); i++)
+            expect(finite_float(gradient.vals[i]),
+                   "arena-backed model gradients stay finite");
+    }
+}
+
+int main(void)
+{
+    ModelConfig config = arena_test_config();
     ModelMemory memory;
 
     expect(model_memory_requirements(config, &memory),
@@ -208,40 +292,9 @@ int main(void)
 
     check_arena_layout(model, memory);
     check_whole_gradient_arena_clears(model);
-
-    int full_inputs[BATCH * BLOCK];
-    int full_targets[BATCH * BLOCK];
-
-    for (int i = 0; i < BATCH * BLOCK; i++) {
-        full_inputs[i] = i % config.vocab_size;
-        full_targets[i] = (i + 1) % config.vocab_size;
-    }
-
-    model_zero_gradients(model);
-    float full_loss =
-        model_forward(model, full_inputs, full_targets, BATCH, BLOCK);
-    model_backward(model);
-    expect(finite_float(full_loss) && full_loss > 0.0f,
-           "full-capacity arena views complete forward and backward");
-
-    int short_inputs[] = { 0, 1, 2 };
-    int short_targets[] = { 1, 2, 3 };
-
-    model_zero_gradients(model);
-    float short_loss = model_forward(model, short_inputs, short_targets, 1, 3);
-    model_backward(model);
-    expect(finite_float(short_loss) && short_loss > 0.0f,
-           "short arena views reshape attention without stale capacity");
-
-    ModelParams params = model_params(model);
-
-    for (int p = 0; p < params.count; p++) {
-        Mat gradient = param_gradient(params.params[p]);
-
-        for (size_t i = 0; i < mat_size(gradient); i++)
-            expect(finite_float(gradient.vals[i]),
-                   "arena-backed model gradients stay finite");
-    }
+    check_full_capacity_view(model, config);
+    check_short_arena_view(model);
+    check_finite_model_gradients(model);
 
     model_free(model);
     if (failures != 0) {

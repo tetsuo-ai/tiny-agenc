@@ -15,6 +15,20 @@ VALIDATION_PERCENT=${VALIDATION_PERCENT:-10}
 SPLIT_SEED=${SPLIT_SEED:-1337}
 ORDER_HELPER=${SPLIT_ORDER_HELPER:-"$REPOSITORY_ROOT/build/split-order"}
 
+cleanup() {
+    rm -f -- "$temp_train" "$temp_validation" "$assignments" \
+        "$temp_dir/train.backup" "$temp_dir/validation.backup"
+    rmdir -- "$temp_dir" 2>/dev/null || true
+}
+
+restore_train_output() {
+    if [[ -e $temp_dir/train.backup ]]; then
+        mv -- "$temp_dir/train.backup" "$TRAIN_OUTPUT"
+        return
+    fi
+    rm -f -- "$TRAIN_OUTPUT"
+}
+
 if [[ ! $VALIDATION_PERCENT =~ ^[0-9]{1,2}$ ]]; then
     printf 'split-corpus: VALIDATION_PERCENT must be an integer in [1, 50]\n' >&2
     exit 1
@@ -64,11 +78,6 @@ temp_train="$temp_dir/train"
 temp_validation="$temp_dir/validation"
 assignments="$temp_dir/assignments"
 
-cleanup() {
-    rm -f -- "$temp_train" "$temp_validation" "$assignments" \
-        "$temp_dir/train.backup" "$temp_dir/validation.backup"
-    rmdir -- "$temp_dir" 2>/dev/null || true
-}
 trap cleanup EXIT
 
 record_count=$(awk 'BEGIN { RS = "" } END { print NR }' "$SOURCE")
@@ -124,11 +133,7 @@ fi
 
 mv -- "$temp_train" "$TRAIN_OUTPUT"
 if ! mv -- "$temp_validation" "$VALIDATION_OUTPUT"; then
-    if [[ -e $temp_dir/train.backup ]]; then
-        mv -- "$temp_dir/train.backup" "$TRAIN_OUTPUT"
-    else
-        rm -f -- "$TRAIN_OUTPUT"
-    fi
+    restore_train_output
     printf 'split-corpus: could not install both outputs; restored train output\n' >&2
     exit 1
 fi

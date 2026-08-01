@@ -172,10 +172,11 @@ and clears every byte. The same failure policy applies. In the
 Chapter 2 witness,
 
 ```c
-int *zeroed = ecalloc(4, sizeof *zeroed);
+int *zeroed = ecalloc(ALLOCATION_ELEMENT_COUNT, sizeof *zeroed);
 ```
 
-must produce four integer objects whose stored bytes are all zero.
+The file-level `ALLOCATION_ELEMENT_COUNT` is `4`, so this must produce
+four integer objects whose stored bytes are all zero.
 
 There are two edges to keep straight. A caller must check that its own
 size arithmetic cannot overflow before calling `emalloc`; the wrapper
@@ -1386,6 +1387,7 @@ source stores the full-turn constant and its hidden state like this:
 
 ```c
 static const float TWO_PI = 6.28318530717958647692f;
+static const float BOX_MULLER_RADIUS_FACTOR = -2.0f;
 
 struct Rng {
     uint64_t state;
@@ -1395,11 +1397,12 @@ struct Rng {
 ```
 
 This complete excerpt appears earlier in [`rng.c`](../src/rng.c), but
-the book waits until each field has a job. `state` drives PCG32. The
+the book waits until each field has a job. `state` drives PCG32.
+`BOX_MULLER_RADIUS_FACTOR` names the `-2` in the radius equation. The
 integer flag says whether `spare_gaussian` currently holds the second
 coordinate from a pair. When the flag is zero, that float's stored
-bits do not matter and must not be read. The `f` suffix on the circle
-constant makes the literal a `float`.
+bits do not matter and must not be read. The `f` suffix on each
+constant makes its literal a `float`.
 
 Here is the complete constructor whose four-step entry procedure was
 built earlier:
@@ -1437,7 +1440,9 @@ float rng_gaussian(Rng *rng)
 
     /* Box-Muller: two uniform draws become two independent gaussians.
      * 1 - u keeps the logarithm's argument in (0, 1], never zero. */
-    float radius = sqrtf(-2.0f * logf(1.0f - rng_uniform(rng)));
+    float radius =
+        sqrtf(BOX_MULLER_RADIUS_FACTOR
+              * logf(1.0f - rng_uniform(rng)));
     float angle  = TWO_PI * rng_uniform(rng);
 
     rng->spare_gaussian     = radius * sinf(angle);

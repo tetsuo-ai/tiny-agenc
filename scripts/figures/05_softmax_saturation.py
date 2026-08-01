@@ -71,16 +71,8 @@ def polyline(points, color):
     )
 
 
-def main():
-    probabilities = [softmax_pair(gap) for gap in GAPS]
-    high_points = [
-        (plot_x(gap), plot_y(high)) for gap, (high, _) in zip(GAPS, probabilities)
-    ]
-    low_points = [
-        (plot_x(gap), plot_y(low)) for gap, (_, low) in zip(GAPS, probabilities)
-    ]
-
-    svg = [
+def start_svg():
+    return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
@@ -142,6 +134,8 @@ def main():
         text(WIDTH - RIGHT, 112, "probability", "axis-label", "end"),
     ]
 
+
+def draw_plot_grid(svg):
     for probability in (0.0, 0.25, 0.5, 0.75, 1.0):
         y = plot_y(probability)
         svg.append(line(LEFT, y, WIDTH - RIGHT, y, "grid"))
@@ -154,6 +148,9 @@ def main():
 
     svg.append(line(LEFT, PLOT_BOTTOM, WIDTH - RIGHT, PLOT_BOTTOM, "axis"))
     svg.append(line(LEFT, TOP, LEFT, PLOT_BOTTOM, "axis"))
+
+
+def draw_probability_curves(svg, high_points, low_points):
     svg.append(polyline(high_points, BLUE))
     svg.append(polyline(low_points, ORANGE))
 
@@ -168,6 +165,8 @@ def main():
         text(WIDTH - RIGHT, PLOT_BOTTOM + 52, "score gap", "axis-label", "end")
     )
 
+
+def draw_probability_table(svg, probabilities):
     table_x = LEFT
     table_y = 512
     label_width = 132
@@ -216,11 +215,31 @@ def main():
             text(x, table_y + 2 * row_height + 22, f"{low:.6f}", "table-value")
         )
 
+
+def write_svg(svg):
     svg.append("</svg>")
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as output_file:
         output_file.write("\n".join(svg) + "\n")
+
+
+def main():
+    probabilities = [softmax_pair(gap) for gap in GAPS]
+    high_points = [
+        (plot_x(gap), plot_y(high))
+        for gap, (high, _) in zip(GAPS, probabilities)
+    ]
+    low_points = [
+        (plot_x(gap), plot_y(low))
+        for gap, (_, low) in zip(GAPS, probabilities)
+    ]
+
+    svg = start_svg()
+    draw_plot_grid(svg)
+    draw_probability_curves(svg, high_points, low_points)
+    draw_probability_table(svg, probabilities)
+    write_svg(svg)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,46 @@
 
 static int checks;
 static int failures;
+static const uint32_t FLOAT_EXPONENT_MASK = 0x7F800000u;
+enum {
+    FIXED_BATCH_SIZE = 2,
+    FIXED_TIME = 4,
+    FIXED_TOKEN_COUNT = FIXED_BATCH_SIZE * FIXED_TIME,
+    TRAINING_STEPS = 60,
+    FIRST_TRAINING_STEP = 1,
+};
+
+static const unsigned long long MODEL_SEED = 2024;
+static const float LOSS_REMAINING_FRACTION = 0.5f;
+static const float LEARNING_RATE = 0.02f;
+static const float ADAM_BETA1 = 0.9f;
+static const float ADAM_BETA2 = 0.999f;
+static const float ADAM_EPSILON = 1e-8f;
+static const float WEIGHT_DECAY = 0.01f;
+static const char TRAINING_TEXT[] = "\nabcabcabcabcabcabcabcabc\n";
+static const char INPUT_TEXT[] = "\nabc\nabc";
+static const char TARGET_TEXT[] = "abc\nabc\n";
+
+typedef struct {
+    Tokenizer *tokenizer;
+    Model *model;
+    int inputs[FIXED_TOKEN_COUNT];
+    int targets[FIXED_TOKEN_COUNT];
+    float initial_loss;
+    float trained_loss;
+} TrainingFixture;
+
+static void expect(int condition, const char *message);
+static uint32_t float_bits(float value);
+static int finite_float(float value);
+static int models_equal(const Model *first, const Model *second);
+static AdamW training_optimizer(void);
+static TrainingFixture training_fixture(void);
+static void train_fixed_batch(TrainingFixture *fixture);
+static void check_checkpoint_round_trip(const TrainingFixture *fixture,
+                                        const char *path);
+static void training_fixture_free(TrainingFixture *fixture);
+int main(int argc, char **argv);
 
 static void expect(int condition, const char *message)
 {
@@ -35,7 +75,8 @@ static uint32_t float_bits(float value)
 
 static int finite_float(float value)
 {
-    return (float_bits(value) & 0x7F800000u) != 0x7F800000u;
+    return (float_bits(value) & FLOAT_EXPONENT_MASK)
+        != FLOAT_EXPONENT_MASK;
 }
 
 static int models_equal(const Model *first, const Model *second)
@@ -57,80 +98,93 @@ static int models_equal(const Model *first, const Model *second)
     return 1;
 }
 
-int main(int argc, char **argv)
+static AdamW training_optimizer(void)
 {
-    if (argc != 2) {
-        fputs("usage: check-15 CHECKPOINT\n", stderr);
-        return EXIT_FAILURE;
-    }
+    AdamW optimizer = {
+        .learning_rate = LEARNING_RATE,
+        .beta1         = ADAM_BETA1,
+        .beta2         = ADAM_BETA2,
+        .epsilon       = ADAM_EPSILON,
+        .weight_decay  = WEIGHT_DECAY,
+    };
 
-    static const char TRAINING_TEXT[] = "\nabcabcabcabcabcabcabcabc\n";
-    static const char INPUT_TEXT[] = "\nabc\nabc";
-    static const char TARGET_TEXT[] = "abc\nabc\n";
-    enum { BATCH = 2, TIME = 4, TOKENS = BATCH * TIME, STEPS = 60 };
+    return optimizer;
+}
 
-    Tokenizer *tokenizer =
-        tokenizer_new(TRAINING_TEXT, sizeof TRAINING_TEXT - 1);
+static TrainingFixture training_fixture(void)
+{
     ModelConfig config = {
         .vocab_size  = 4,
-        .block_size  = TIME,
+        .block_size  = FIXED_TIME,
         .d_model     = 8,
         .head_count  = 2,
         .layer_count = 1,
-        .batch_size  = BATCH,
+        .batch_size  = FIXED_BATCH_SIZE,
     };
-    Model *model = model_new(config, 2024);
-    int inputs[TOKENS];
-    int targets[TOKENS];
+    TrainingFixture fixture = {
+        .tokenizer = tokenizer_new(
+            TRAINING_TEXT, sizeof TRAINING_TEXT - 1),
+    };
 
-    expect(tokenizer_encode(tokenizer, inputs, INPUT_TEXT,
-                            sizeof INPUT_TEXT - 1) == TOKENS,
+    fixture.model = model_new(config, MODEL_SEED);
+    expect(tokenizer_encode(fixture.tokenizer, fixture.inputs,
+                            INPUT_TEXT, sizeof INPUT_TEXT - 1)
+               == FIXED_TOKEN_COUNT,
            "fixed inputs encode completely");
-    expect(tokenizer_encode(tokenizer, targets, TARGET_TEXT,
-                            sizeof TARGET_TEXT - 1) == TOKENS,
+    expect(tokenizer_encode(fixture.tokenizer, fixture.targets,
+                            TARGET_TEXT, sizeof TARGET_TEXT - 1)
+               == FIXED_TOKEN_COUNT,
            "fixed targets encode completely");
+    fixture.initial_loss = model_forward(
+        fixture.model, fixture.inputs, fixture.targets,
+        FIXED_BATCH_SIZE, FIXED_TIME);
+    return fixture;
+}
 
-    float initial_loss =
-        model_forward(model, inputs, targets, BATCH, TIME);
-    AdamW optimizer = {
-        .learning_rate = 0.02f,
-        .beta1         = 0.9f,
-        .beta2         = 0.999f,
-        .epsilon       = 1e-8f,
-        .weight_decay  = 0.01f,
-    };
+static void train_fixed_batch(TrainingFixture *fixture)
+{
+    AdamW optimizer = training_optimizer();
 
-    for (int step = 1; step <= STEPS; step++) {
-        model_zero_gradients(model);
-        (void)model_forward(model, inputs, targets, BATCH, TIME);
-        model_backward(model);
-        expect(model_step(model, optimizer, step) == 0,
+    for (int step = FIRST_TRAINING_STEP; step <= TRAINING_STEPS; step++) {
+        model_zero_gradients(fixture->model);
+        (void)model_forward(fixture->model, fixture->inputs,
+                            fixture->targets,
+                            FIXED_BATCH_SIZE, FIXED_TIME);
+        model_backward(fixture->model);
+        expect(model_step(fixture->model, optimizer, step) == 0,
                "the fixed-batch optimizer step stays finite");
     }
 
-    float trained_loss =
-        model_forward(model, inputs, targets, BATCH, TIME);
-
-    expect(finite_float(initial_loss) && finite_float(trained_loss),
+    fixture->trained_loss = model_forward(
+        fixture->model, fixture->inputs, fixture->targets,
+        FIXED_BATCH_SIZE, FIXED_TIME);
+    expect(finite_float(fixture->initial_loss)
+               && finite_float(fixture->trained_loss),
            "training losses remain finite");
-    expect(trained_loss < initial_loss * 0.5f,
+    expect(fixture->trained_loss
+               < fixture->initial_loss * LOSS_REMAINING_FRACTION,
            "the fixed-batch loss falls by at least half");
-    expect(model_save(model, tokenizer, argv[1]) == 0,
+}
+
+static void check_checkpoint_round_trip(const TrainingFixture *fixture,
+                                        const char *path)
+{
+    expect(model_save(fixture->model, fixture->tokenizer, path) == 0,
            "the trained model saves a checkpoint");
 
     Tokenizer *loaded_tokenizer = NULL;
-    Model *loaded = model_load(&loaded_tokenizer, argv[1]);
+    Model *loaded = model_load(&loaded_tokenizer, path);
 
     expect(loaded != NULL && loaded_tokenizer != NULL,
            "the checkpoint loads without sampling");
     if (loaded != NULL && loaded_tokenizer != NULL) {
-        expect(models_equal(model, loaded),
+        expect(models_equal(fixture->model, loaded),
                "checkpoint loading preserves every parameter bit");
+        float loaded_loss = model_forward(
+            loaded, fixture->inputs, fixture->targets,
+            FIXED_BATCH_SIZE, FIXED_TIME);
 
-        float loaded_loss =
-            model_forward(loaded, inputs, targets, BATCH, TIME);
-
-        expect(float_bits(loaded_loss) == float_bits(trained_loss),
+        expect(float_bits(loaded_loss) == float_bits(fixture->trained_loss),
                "checkpoint loading preserves the forward loss");
     }
 
@@ -138,8 +192,26 @@ int main(int argc, char **argv)
         model_free(loaded);
     if (loaded_tokenizer != NULL)
         tokenizer_free(loaded_tokenizer);
-    model_free(model);
-    tokenizer_free(tokenizer);
+}
+
+static void training_fixture_free(TrainingFixture *fixture)
+{
+    model_free(fixture->model);
+    tokenizer_free(fixture->tokenizer);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc != 2) {
+        fputs("usage: check-15 CHECKPOINT\n", stderr);
+        return EXIT_FAILURE;
+    }
+
+    TrainingFixture fixture = training_fixture();
+
+    train_fixed_batch(&fixture);
+    check_checkpoint_round_trip(&fixture, argv[1]);
+    training_fixture_free(&fixture);
     remove(argv[1]);
 
     if (failures != 0) {

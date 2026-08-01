@@ -107,11 +107,13 @@ every object once and still put position parameters before token
 parameters on one run and after them on another.
 
 The real source groups the list, its next slot, and the shared
-construction recipe in one private record. This contiguous excerpt is
-the top of `model_parameters.c`:
+construction recipe in one private record. This shortened excerpt
+joins that record to its first two helpers; the private routine map
+between them is omitted:
 
 ```c
 static const float INIT_STDDEV = 0.02f;
+static const float RESIDUAL_VARIANCE_BRANCHES = 2.0f;
 
 typedef struct {
     Model *model;
@@ -126,13 +128,20 @@ static ParameterCursor parameter_registry_create(Model *m, Rng *rng)
     ModelConfig cfg  = m->cfg;
     int         wide = MODEL_MLP_WIDENING * cfg.d_model;
     float residual_stddev =
-        INIT_STDDEV / sqrtf(2.0f * (float)cfg.layer_count);
+        INIT_STDDEV
+        / sqrtf(RESIDUAL_VARIANCE_BRANCHES * (float)cfg.layer_count);
 
     m->param_count =
         MODEL_TENSORS_ELSEWHERE + MODEL_TENSORS_PER_BLOCK * cfg.layer_count;
     m->params = emalloc((size_t)m->param_count * sizeof *m->params);
 
-    ParameterCursor cursor = { m, rng, 0, wide, residual_stddev };
+    ParameterCursor cursor = {
+        .model = m,
+        .rng = rng,
+        .at = 0,
+        .wide = wide,
+        .residual_stddev = residual_stddev,
+    };
 
     return cursor;
 }
@@ -153,7 +162,8 @@ still uses eight objects per block and four elsewhere. The cast to
 `sizeof *m->params` asks for the size of one `Param *` list entry
 without repeating its type.
 
-The positional initializer gives `at` the third value, zero.
+The designated initializer states which value belongs to every field;
+`.at = 0` starts the registry at its first slot.
 `parameter_registry_add` stores one already-created pointer in that
 slot, advances the cursor, then stores the same pointer through
 `named`. A caller passes an address such as `&m->token_table`, so
@@ -268,7 +278,10 @@ The public accessors preserve the distinction:
 ```c
 ModelParams model_params(const Model *m)
 {
-    ModelParams view = { m->params, m->param_count };
+    ModelParams view = {
+        .params = m->params,
+        .count = m->param_count,
+    };
 
     return view;
 }

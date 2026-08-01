@@ -352,15 +352,21 @@ values:
 ```c
 static AdamW adamw_with_rate(float learning_rate)
 {
-    AdamW opt = { learning_rate, ADAM_BETA1, ADAM_BETA2, ADAM_EPSILON, WEIGHT_DECAY };
+    AdamW opt = {
+        .learning_rate = learning_rate,
+        .beta1 = ADAM_BETA1,
+        .beta2 = ADAM_BETA2,
+        .epsilon = ADAM_EPSILON,
+        .weight_decay = WEIGHT_DECAY,
+    };
 
     return opt;
 }
 ```
 
-Chapter 4 introduced this
-[positional struct initializer](04-poor-mans-tensors.md#put-the-shape-beside-the-address).
-Its fields match the public `AdamW` record in `param.h`: learning rate,
+Each `.member = value` line names the field it fills, using Chapter 7's
+[designated struct initializer](07-trust-but-verify.md#let-one-driver-call-different-operations).
+The public `AdamW` record in `param.h` holds the learning rate,
 first-history fraction, second-history fraction, denominator guard, and
 direct pull toward zero. Chapter 8 constructed their meanings and
 [validates the recipe before changing history](08-adamw.md#check-the-recipe-before-changing-history).
@@ -384,15 +390,15 @@ The loop counter itself has this shape. This is a schematic with the
 body omitted, not a source excerpt:
 
 ```text
-for (int step = 1; step <= options->steps; step++) {
+for (int step = FIRST_TRAINING_STEP; step <= options->steps; step++) {
     /* one update and its due observation work */
 }
 ```
 
 For `--steps 3`, predict the three values passed to `model_step`.
 
-The initializer stores `1`, the condition admits `1`, `2`, and `3`,
-and the increment runs after each body:
+`FIRST_TRAINING_STEP` stores `1`. The condition admits `1`, `2`, and
+`3`, and the increment runs after each body:
 
 ```text
 requested steps       3
@@ -439,16 +445,19 @@ text.
 The focused lab performs sixty one-based updates:
 
 ```c
-for (int step = 1; step <= STEPS; step++) {
-    model_zero_gradients(model);
-    (void)model_forward(model, inputs, targets, BATCH, TIME);
-    model_backward(model);
-    expect(model_step(model, optimizer, step) == 0,
+for (int step = FIRST_TRAINING_STEP; step <= TRAINING_STEPS; step++) {
+    model_zero_gradients(fixture->model);
+    (void)model_forward(fixture->model, fixture->inputs,
+                        fixture->targets,
+                        FIXED_BATCH_SIZE, FIXED_TIME);
+    model_backward(fixture->model);
+    expect(model_step(fixture->model, optimizer, step) == 0,
            "the fixed-batch optimizer step stays finite");
 }
 
-float trained_loss =
-    model_forward(model, inputs, targets, BATCH, TIME);
+fixture->trained_loss = model_forward(
+    fixture->model, fixture->inputs, fixture->targets,
+    FIXED_BATCH_SIZE, FIXED_TIME);
 ```
 
 This exact excerpt from
@@ -466,12 +475,14 @@ The repository also has a stricter memorization witness. Its acceptance
 condition is source policy rather than an unrecorded output number:
 
 ```c
-int passed = finite_float(initial_loss)
-          && finite_float(final_loss)
-          && final_loss < 0.10f
-          && final_loss < initial_loss * 0.10f;
+return finite_float(initial_loss)
+    && finite_float(final_loss)
+    && final_loss < MAXIMUM_FINAL_LOSS
+    && final_loss
+           < initial_loss * MAXIMUM_REMAINING_FRACTION;
 ```
 
+Both named limits are `0.10f` in [`overfit.c`](../tests/overfit.c).
 If an illustrative initial loss were `1.6`, the two upper bounds would
 be `0.10` and `0.16`, so the stricter requirement would be `0.10`.
 The real command prints the losses produced by the current compiler and
@@ -912,10 +923,10 @@ static void print_training_report(TrainingResources *resources,
         printf("step %5d/%d | loss %.4f | val %.4f | %6.1f ms/step\n",
                step, options->steps, (double)loss,
                (double)validation_loss, milliseconds);
-    } else {
-        printf("step %5d/%d | loss %.4f | %6.1f ms/step\n",
-               step, options->steps, (double)loss, milliseconds);
+        return;
     }
+    printf("step %5d/%d | loss %.4f | %6.1f ms/step\n",
+           step, options->steps, (double)loss, milliseconds);
 }
 ```
 
@@ -927,20 +938,21 @@ static void report_training_if_due(TrainingResources *resources,
                                    const TrainOptions *options,
                                    int step, float loss)
 {
-    if (step == 1 || step % LOSS_INTERVAL == 0) {
-        double now = time_seconds();
-        double milliseconds =
-            MILLISECONDS_PER_SECOND
-            * (now - state->clock) / state->timed_steps;
+    if (step != FIRST_TRAINING_STEP && step % LOSS_INTERVAL != 0)
+        return;
 
-        print_training_report(resources, state, options, step, loss,
-                              milliseconds);
-        restart_training_timer(state);
-    }
+    double now = time_seconds();
+    double milliseconds =
+        MILLISECONDS_PER_SECOND
+        * (now - state->clock) / state->timed_steps;
+
+    print_training_report(resources, state, options, step, loss,
+                          milliseconds);
+    restart_training_timer(state);
 }
 ```
 
-The Chapter 1
+`FIRST_TRAINING_STEP` names the one-based starting point. The Chapter 1
 [remainder operator](01-the-map.md#make-the-geometry-safe) makes the
 second condition true at exact multiples of 50. Step 1 is reported
 separately, so a run produces early feedback without waiting.
@@ -1006,25 +1018,28 @@ The wrapper is exact:
 ```c
 static void print_training_sample(Model *m, const Tokenizer *tk, Rng *rng, int step)
 {
-    int ids[1 + SAMPLE_LENGTH];
+    int ids[SAMPLE_SEED_TOKENS + SAMPLE_LENGTH];
 
     ids[0] = newline_id(tk);
-    model_sample(m, rng, ids, 1, 1 + SAMPLE_LENGTH, DEFAULT_TEMPERATURE);
+    model_sample(m, rng, ids, SAMPLE_SEED_TOKENS,
+                 SAMPLE_SEED_TOKENS + SAMPLE_LENGTH,
+                 DEFAULT_TEMPERATURE);
     printf("---- sample at step %d ----\n", step);
-    print_text(tk, ids + 1, SAMPLE_LENGTH);
+    print_text(tk, ids + SAMPLE_SEED_TOKENS, SAMPLE_LENGTH);
     printf("---------------------------\n");
 }
 ```
 
-`SAMPLE_LENGTH` is 200, so the fixed local array has 201 integer slots:
-one private newline seed and 200 result slots. `ids[0]` receives the
-known newline id. The opaque handoff says that one id is known and 201
-must exist when the call returns.
+`SAMPLE_SEED_TOKENS` is one and `SAMPLE_LENGTH` is 200, so the fixed
+local array has 201 integer slots: one private newline seed and 200
+result slots. `ids[0]` receives the known newline id. The opaque handoff
+says that one id is known and 201 must exist when the call returns.
 
 **Predict:** how many ids does `print_text` send to standard output, and
 does it include the seed?
 
-It begins at `ids + 1`, prints 200 ids, and skips slot zero. The two
+It begins at `ids + SAMPLE_SEED_TOKENS`, prints 200 ids, and skips slot
+zero. The two
 `printf` calls put a step-numbered banner around that text. The
 `DEFAULT_TEMPERATURE` value travels into the handoff, but
 [Chapter 16](16-sampling.md#change-the-gaps-without-changing-their-order)
@@ -1038,29 +1053,31 @@ Two small helpers own the remaining schedules:
 static void sample_training_if_due(TrainingResources *resources,
                                    TrainingObservationState *state, int step)
 {
-    if (step % SAMPLE_INTERVAL == 0) {
-        print_training_sample(resources->model, resources->tokenizer,
-                              resources->sample_rng, step);
-        restart_training_timer(state);
-    }
+    if (step % SAMPLE_INTERVAL != 0)
+        return;
+
+    print_training_sample(resources->model, resources->tokenizer,
+                          resources->sample_rng, step);
+    restart_training_timer(state);
 }
 
 static void save_training_if_due(TrainingResources *resources,
                                  TrainingObservationState *state,
                                  const TrainOptions *options, int step)
 {
-    if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
-        ModelSaveResult saved =
-            model_save_durable(resources->model, resources->tokenizer,
-                               options->out_path);
+    if (step % CHECKPOINT_INTERVAL != 0 && step != options->steps)
+        return;
 
-        if (saved == MODEL_SAVE_NOT_COMMITTED)
-            die("cannot write checkpoint %s", options->out_path);
-        if (saved == MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED)
-            die("checkpoint %s was committed, but directory finalization "
-                "failed; durability is unconfirmed", options->out_path);
-        restart_training_timer(state);
-    }
+    ModelSaveResult saved =
+        model_save_durable(resources->model, resources->tokenizer,
+                           options->out_path);
+
+    if (saved == MODEL_SAVE_NOT_COMMITTED)
+        die("cannot write checkpoint %s", options->out_path);
+    if (saved == MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED)
+        die("checkpoint %s was committed, but directory finalization "
+            "failed; durability is unconfirmed", options->out_path);
+    restart_training_timer(state);
 }
 ```
 
@@ -1159,7 +1176,7 @@ static void train_loop(TrainingResources *resources,
     TrainingObservationState observation =
         prepare_training_observation(resources, options);
 
-    for (int step = 1; step <= options->steps; step++) {
+    for (int step = FIRST_TRAINING_STEP; step <= options->steps; step++) {
         float loss =
             run_training_step(resources, &step_state, options, step);
 

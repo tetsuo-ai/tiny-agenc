@@ -16,16 +16,28 @@
 #error "model_invalid.c must be compiled with NDEBUG"
 #endif
 
+enum {
+    PIPE_READ_END,
+    PIPE_WRITE_END,
+    DIAGNOSTIC_CAPACITY = 128,
+};
+static const unsigned long long MODEL_SEED = 17;
+
+static void construct_model(ModelConfig config);
+static int read_diagnostic(int descriptor, char *text, size_t capacity);
+static int construction_is_rejected(ModelConfig config);
+int main(void);
+
 static void construct_model(ModelConfig config)
 {
-    Model *model = model_new(config, 17);
+    Model *model = model_new(config, MODEL_SEED);
 
     model_free(model);
 }
 
 static int read_diagnostic(int descriptor, char *text, size_t capacity)
 {
-    char discard[128];
+    char discard[DIAGNOSTIC_CAPACITY];
     size_t used = 0;
     int fits = capacity > 0;
 
@@ -41,12 +53,14 @@ static int read_diagnostic(int descriptor, char *text, size_t capacity)
                 fits = 0;
             else
                 used += (size_t)received;
-        } else if (received == 0) {
-            break;
-        } else if (errno != EINTR) {
-            fits = 0;
-            break;
+            continue;
         }
+        if (received == 0)
+            break;
+        if (errno == EINTR)
+            continue;
+        fits = 0;
+        break;
     }
     if (capacity > 0)
         text[used] = '\0';
@@ -65,28 +79,29 @@ static int construction_is_rejected(ModelConfig config)
 
     if (child < 0) {
         perror("check-invalid-construction: fork");
-        (void)close(diagnostic_pipe[0]);
-        (void)close(diagnostic_pipe[1]);
+        (void)close(diagnostic_pipe[PIPE_READ_END]);
+        (void)close(diagnostic_pipe[PIPE_WRITE_END]);
         return 0;
     }
     if (child == 0) {
         const struct rlimit no_core = { 0, 0 };
 
-        (void)close(diagnostic_pipe[0]);
+        (void)close(diagnostic_pipe[PIPE_READ_END]);
         (void)setrlimit(RLIMIT_CORE, &no_core);
-        if (dup2(diagnostic_pipe[1], STDERR_FILENO) < 0)
+        if (dup2(diagnostic_pipe[PIPE_WRITE_END], STDERR_FILENO) < 0)
             _exit(EXIT_FAILURE);
-        (void)close(diagnostic_pipe[1]);
+        (void)close(diagnostic_pipe[PIPE_WRITE_END]);
         construct_model(config);
         _exit(EXIT_SUCCESS);
     }
 
-    (void)close(diagnostic_pipe[1]);
-    char diagnostic[128];
+    (void)close(diagnostic_pipe[PIPE_WRITE_END]);
+    char diagnostic[DIAGNOSTIC_CAPACITY];
     int diagnostic_ok =
-        read_diagnostic(diagnostic_pipe[0], diagnostic, sizeof diagnostic);
+        read_diagnostic(diagnostic_pipe[PIPE_READ_END], diagnostic,
+                        sizeof diagnostic);
 
-    (void)close(diagnostic_pipe[0]);
+    (void)close(diagnostic_pipe[PIPE_READ_END]);
     int status;
 
     if (waitpid(child, &status, 0) < 0) {

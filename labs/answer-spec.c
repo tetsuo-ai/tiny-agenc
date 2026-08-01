@@ -4,6 +4,10 @@
  */
 #include "spec.h"
 
+int lab_config_valid(int vocab, int block, int width, int heads, int layers,
+                     int batch);
+size_t lab_parameter_count(int vocab, int block, int width, int layers);
+
 int lab_config_valid(int vocab, int block, int width,
                      int heads, int layers, int batch)
 {

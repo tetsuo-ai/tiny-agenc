@@ -434,8 +434,14 @@ void layernorm_forward(Mat out, float *means, float *rstds, Mat x,
 {
     assert(out.rows == x.rows && out.cols == x.cols);
 
-    LayernormForward forward =
-        { out, means, rstds, x, gain, bias };
+    LayernormForward forward = {
+        .out = out,
+        .means = means,
+        .rstds = rstds,
+        .x = x,
+        .gain = gain,
+        .bias = bias,
+    };
 
     for (int row = 0; row < x.rows; row++)
         layernorm_forward_row(&forward, row);
@@ -1014,42 +1020,69 @@ Only columns `0` through `t` of that row contain attention weights.
 Columns after `t` remain untouched and have no meaning. Code outside
 the operation must not inspect them.
 
-Here is the complete helper for one sequence and one head:
+The private `AttentionForward` record carries the five values shared by
+every sequence-head helper. Here is that record joined to the complete
+helper for one sequence and one head:
 
 ```c
-static void attention_head_forward(Mat out, Mat scores, Mat qkv, int seq,
-                                   int head, int time, int head_count)
+typedef struct {
+    Mat out;
+    Mat scores;
+    Mat qkv;
+    int time;
+    int head_count;
+} AttentionForward;
+
+static void attention_head_forward(const AttentionForward *forward,
+                                   int sequence, int head)
 {
-    int   head_size = out.cols / head_count;
+    int   head_size = forward->out.cols / forward->head_count;
     int   offset    = head * head_size;
     float scale     = 1.0f / sqrtf((float)head_size);
 
-    for (int t = 0; t < time; t++) {
-        const float *query   = qkv_slice(qkv, seq * time + t, QUERIES, offset);
-        float       *weights = mat_row(scores, (seq * head_count + head) * time + t);
+    for (int time_index = 0; time_index < forward->time; time_index++) {
+        int row = sequence * forward->time + time_index;
+        int score_row =
+            (sequence * forward->head_count + head) * forward->time
+            + time_index;
+        const float *query =
+            qkv_slice(forward->qkv, row, QUERIES, offset);
+        float *weights = mat_row(forward->scores, score_row);
 
-        /* Causality is a loop bound: position t sees 0..t only. */
-        for (int t2 = 0; t2 <= t; t2++)
-            weights[t2] = scale * dot(query, qkv_slice(qkv, seq * time + t2, KEYS, offset), head_size);
-        softmax_in_place(weights, t + 1);
+        /* Causality is a loop bound: this position sees its past only. */
+        for (int source = 0; source <= time_index; source++)
+            weights[source] =
+                scale
+                * dot(query,
+                      qkv_slice(forward->qkv,
+                                sequence * forward->time + source,
+                                KEYS, offset),
+                      head_size);
+        softmax_in_place(weights, time_index + 1);
 
-        float *output = mat_row(out, seq * time + t) + offset;
+        float *output = mat_row(forward->out, row) + offset;
 
         memset(output, 0, (size_t)head_size * sizeof *output);
-        for (int t2 = 0; t2 <= t; t2++)
-            add_scaled(output, weights[t2], qkv_slice(qkv, seq * time + t2, VALUES, offset), head_size);
+        for (int source = 0; source <= time_index; source++)
+            add_scaled(output, weights[source],
+                       qkv_slice(forward->qkv,
+                                 sequence * forward->time + source,
+                                 VALUES, offset),
+                       head_size);
     }
 }
 ```
 
-The first three lines derive `D`, the head's channel offset, and the
-scale. The `t` loop visits each query position. Its first pointer finds
-that query slice. Its second pointer finds the score row for this
-sequence, head, and position.
+The first three helper lines derive `D`, the head's channel offset, and
+the scale. The `time_index` loop visits each query position. `row` names
+its flattened sequence row, while `score_row` names the row for this
+sequence, head, and position. The next two pointers find the query and
+weights at those rows.
 
-The `t2 <= t` loop is the causal boundary. It dots the current query
-with each visible key, scales the result, and writes only the visible
-prefix. Softmax receives `t + 1`, exactly the length of that prefix.
+The `source <= time_index` loop is the causal boundary. It dots the
+current query with each visible key, scales the result, and writes only
+the visible prefix. Softmax receives `time_index + 1`, exactly the
+length of that prefix.
 
 The output pointer selects the current flattened row and advances to
 this head's slice. The next loop uses `+=` inside `add_scaled`, so old
@@ -1075,34 +1108,42 @@ sequence-head pairs:
 void attention_forward(Mat out, Mat scores, Mat qkv, int time, int head_count)
 {
     int sequence_count = out.rows / time;
+    AttentionForward forward = {
+        .out = out,
+        .scores = scores,
+        .qkv = qkv,
+        .time = time,
+        .head_count = head_count,
+    };
 
     assert(qkv.cols == QKV_STREAMS * out.cols && out.cols % head_count == 0);
     assert(scores.cols == time && out.rows % time == 0);
 
     #pragma omp parallel for collapse(2) if(sequence_count * head_count >= PARALLEL_THRESHOLD)
-    for (int seq = 0; seq < sequence_count; seq++)
+    for (int sequence = 0; sequence < sequence_count; sequence++)
         for (int head = 0; head < head_count; head++)
-            attention_head_forward(out, scores, qkv, seq, head, time, head_count);
+            attention_head_forward(&forward, sequence, head);
 }
 ```
 
-`sequence_count` reverses the flattening rule `R = B*T`. The first
-assertion requires a `3C` packed input and an equal head split. The
-second requires `T` score columns and complete sequences.
-`collapse(2)` lets OpenMP treat each `(seq, head)` pair as one unit of
-work. Those pairs write disjoint score rows and disjoint output channel
-slices, so they do not race.
+`sequence_count` reverses the flattening rule `R = B*T`. The record
+gives each helper the same matrices and shape values without an
+eight-argument call. The first assertion requires a `3C` packed input
+and an equal head split. The second requires `T` score columns and
+complete sequences. `collapse(2)` lets OpenMP treat each
+`(sequence, head)` pair as one unit of work. Those pairs write disjoint
+score rows and disjoint output channel slices, so they do not race.
 
 The caller must pass positive `time` and `head_count` before this
 function divides or takes a remainder by them. It must also provide
 the full row capacities implied by the shapes. The assertions catch
 the main shape disagreements, not every invalid pointer or capacity.
 
-Sequence indexing uses `seq * time + t`, so a position in one sequence
+Sequence indexing uses `sequence * time + time_index`, so a position in one sequence
 never consults keys or values from another. For a direct causality
 check, change every query, key, and value at position 2. Outputs at
 positions 0 and 1 must remain bit-for-bit unchanged because neither
-earlier loop ever visits `t2 = 2`.
+earlier loop ever visits `source = 2`.
 
 ## Add an edit without erasing the notes
 
@@ -1248,6 +1289,7 @@ function; intervening operations are omitted:
 ```c
 static const float GELU_SQRT_2_OVER_PI = 0.7978845608f;
 static const float GELU_CUBIC_COEFF    = 0.044715f;
+static const float GELU_HALF           = 0.5f;
 
 void gelu_forward(Mat out, Mat x)
 {
@@ -1257,12 +1299,12 @@ void gelu_forward(Mat out, Mat x)
         float value = x.vals[i];
         float inner = GELU_SQRT_2_OVER_PI * (value + GELU_CUBIC_COEFF * value * value * value);
 
-        out.vals[i] = 0.5f * value * (1.0f + tanhf(inner));
+        out.vals[i] = GELU_HALF * value * (1.0f + tanhf(inner));
     }
 }
 ```
 
-The two constants name the fixed numbers in the formula. `count`
+The three constants name the fixed numbers in the formula. `count`
 flattens the input matrix because each element is transformed without
 consulting any neighbor. Inside the loop, `value` saves the current
 input, `inner` computes the cubic expression, and the final line

@@ -25,6 +25,7 @@ ROW_HEIGHT = 126
 QUERIES = ((1.0, 0.0), (0.0, 1.0), (1.0, 1.0))
 KEYS = ((1.0, 0.0), (0.0, 1.0), (1.0, 1.0))
 VALUES = ((2.0, 1.0), (4.0, 3.0), (8.0, 7.0))
+POSITION_COUNT = len(QUERIES)
 
 INK = "#17233d"
 MUTED = "#5d6878"
@@ -121,12 +122,8 @@ def vector(values, digits=0):
     return f"[{members}]"
 
 
-def main():
-    weights, outputs = attention_fixture()
-    table_width = ROW_LABEL_WIDTH + 3 * CELL_WIDTH + OUTPUT_WIDTH
-    table_height = HEADER_HEIGHT + 3 * ROW_HEIGHT
-
-    svg = [
+def start_svg(table_width, table_height):
+    return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
@@ -194,6 +191,8 @@ def main():
         ),
     ]
 
+
+def table_header_cells():
     header_cells = [
         (
             TABLE_X,
@@ -202,7 +201,7 @@ def main():
             "Q vector",
         )
     ]
-    for key_index in range(3):
+    for key_index in range(POSITION_COUNT):
         header_cells.append(
             (
                 TABLE_X + ROW_LABEL_WIDTH + key_index * CELL_WIDTH,
@@ -213,121 +212,127 @@ def main():
         )
     header_cells.append(
         (
-            TABLE_X + ROW_LABEL_WIDTH + 3 * CELL_WIDTH,
+            TABLE_X + ROW_LABEL_WIDTH + POSITION_COUNT * CELL_WIDTH,
             OUTPUT_WIDTH,
             "weighted output",
             "sum(weight * V)",
         )
     )
+    return header_cells
 
-    for x, width, heading, detail in header_cells:
+
+def draw_table_headers(svg):
+    for x, width, heading, detail in table_header_cells():
         svg.append(rect(x, TABLE_Y, width, HEADER_HEIGHT, HEADER_FILL))
         svg.append(text(x + width / 2, TABLE_Y + 37, heading, "header-main"))
         svg.append(text(x + width / 2, TABLE_Y + 63, detail, "header-detail"))
 
-    for time_index in range(3):
-        row_y = TABLE_Y + HEADER_HEIGHT + time_index * ROW_HEIGHT
-        svg.append(
-            rect(TABLE_X, row_y, ROW_LABEL_WIDTH, ROW_HEIGHT, HEADER_FILL)
-        )
-        svg.append(
-            text(
-                TABLE_X + 18,
-                row_y + 49,
-                f"query t = {time_index}",
-                "row-main",
-                "start",
-            )
-        )
-        svg.append(
-            text(
-                TABLE_X + 18,
-                row_y + 77,
-                f"Q={vector(QUERIES[time_index])}",
-                "row-detail",
-                "start",
-            )
-        )
 
-        for key_index in range(3):
+def draw_query_label(svg, time_index, row_y):
+    svg.append(rect(TABLE_X, row_y, ROW_LABEL_WIDTH, ROW_HEIGHT, HEADER_FILL))
+    svg.append(
+        text(
+            TABLE_X + 18,
+            row_y + 49,
+            f"query t = {time_index}",
+            "row-main",
+            "start",
+        )
+    )
+    svg.append(
+        text(
+            TABLE_X + 18,
+            row_y + 77,
+            f"Q={vector(QUERIES[time_index])}",
+            "row-detail",
+            "start",
+        )
+    )
+
+
+def draw_weight_cell(svg, cell_x, row_y, weight):
+    fill = blend_hex(BLUE_LIGHT, BLUE_DARK, weight)
+    svg.append(rect(cell_x, row_y, CELL_WIDTH, ROW_HEIGHT, fill))
+    label_class = "cell-label-light" if weight >= 0.62 else "cell-label"
+    value_class = "cell-value-light" if weight >= 0.62 else "cell-value"
+    svg.append(
+        text(
+            cell_x + CELL_WIDTH / 2,
+            row_y + 49,
+            "softmax weight",
+            label_class,
+        )
+    )
+    svg.append(
+        text(
+            cell_x + CELL_WIDTH / 2,
+            row_y + 78,
+            f"{weight:.6f}",
+            value_class,
+        )
+    )
+
+
+def draw_unused_cell(svg, cell_x, row_y):
+    svg.append(rect(cell_x, row_y, CELL_WIDTH, ROW_HEIGHT, UNUSED_FILL))
+    svg.extend(unused_mark(cell_x, row_y, CELL_WIDTH, ROW_HEIGHT))
+    svg.append(
+        text(
+            cell_x + CELL_WIDTH / 2,
+            row_y + 55,
+            "future position",
+            "unused",
+        )
+    )
+    svg.append(
+        text(
+            cell_x + CELL_WIDTH / 2,
+            row_y + 78,
+            "not read",
+            "unused",
+        )
+    )
+
+
+def draw_output_cell(svg, output, time_index, row_y):
+    output_x = TABLE_X + ROW_LABEL_WIDTH + POSITION_COUNT * CELL_WIDTH
+    svg.append(rect(output_x, row_y, OUTPUT_WIDTH, ROW_HEIGHT, OUTPUT_FILL))
+    svg.append(
+        text(
+            output_x + OUTPUT_WIDTH / 2,
+            row_y + 49,
+            f"output t = {time_index}",
+            "output-label",
+        )
+    )
+    svg.append(
+        text(
+            output_x + OUTPUT_WIDTH / 2,
+            row_y + 78,
+            vector(output, 5),
+            "output-value",
+        )
+    )
+
+
+def draw_attention_rows(svg, weights, outputs):
+    for time_index in range(POSITION_COUNT):
+        row_y = TABLE_Y + HEADER_HEIGHT + time_index * ROW_HEIGHT
+        draw_query_label(svg, time_index, row_y)
+
+        for key_index in range(POSITION_COUNT):
             cell_x = TABLE_X + ROW_LABEL_WIDTH + key_index * CELL_WIDTH
             if key_index <= time_index:
-                weight = weights[time_index][key_index]
-                fill = blend_hex(BLUE_LIGHT, BLUE_DARK, weight)
-                svg.append(rect(cell_x, row_y, CELL_WIDTH, ROW_HEIGHT, fill))
-                label_class = (
-                    "cell-label-light" if weight >= 0.62 else "cell-label"
-                )
-                value_class = (
-                    "cell-value-light" if weight >= 0.62 else "cell-value"
-                )
-                svg.append(
-                    text(
-                        cell_x + CELL_WIDTH / 2,
-                        row_y + 49,
-                        "softmax weight",
-                        label_class,
-                    )
-                )
-                svg.append(
-                    text(
-                        cell_x + CELL_WIDTH / 2,
-                        row_y + 78,
-                        f"{weight:.6f}",
-                        value_class,
-                    )
+                draw_weight_cell(
+                    svg, cell_x, row_y, weights[time_index][key_index]
                 )
             else:
-                svg.append(
-                    rect(
-                        cell_x,
-                        row_y,
-                        CELL_WIDTH,
-                        ROW_HEIGHT,
-                        UNUSED_FILL,
-                    )
-                )
-                svg.extend(
-                    unused_mark(cell_x, row_y, CELL_WIDTH, ROW_HEIGHT)
-                )
-                svg.append(
-                    text(
-                        cell_x + CELL_WIDTH / 2,
-                        row_y + 55,
-                        "future position",
-                        "unused",
-                    )
-                )
-                svg.append(
-                    text(
-                        cell_x + CELL_WIDTH / 2,
-                        row_y + 78,
-                        "not read",
-                        "unused",
-                    )
-                )
+                draw_unused_cell(svg, cell_x, row_y)
 
-        output_x = TABLE_X + ROW_LABEL_WIDTH + 3 * CELL_WIDTH
-        svg.append(
-            rect(output_x, row_y, OUTPUT_WIDTH, ROW_HEIGHT, OUTPUT_FILL)
-        )
-        svg.append(
-            text(
-                output_x + OUTPUT_WIDTH / 2,
-                row_y + 49,
-                f"output t = {time_index}",
-                "output-label",
-            )
-        )
-        svg.append(
-            text(
-                output_x + OUTPUT_WIDTH / 2,
-                row_y + 78,
-                vector(outputs[time_index], 5),
-                "output-value",
-            )
-        )
+        draw_output_cell(svg, outputs[time_index], time_index, row_y)
 
+
+def write_svg(svg, table_height):
     svg.extend(
         [
             text(
@@ -347,6 +352,19 @@ def main():
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as output_file:
         output_file.write("\n".join(svg) + "\n")
+
+
+def main():
+    weights, outputs = attention_fixture()
+    table_width = (
+        ROW_LABEL_WIDTH + POSITION_COUNT * CELL_WIDTH + OUTPUT_WIDTH
+    )
+    table_height = HEADER_HEIGHT + POSITION_COUNT * ROW_HEIGHT
+    svg = start_svg(table_width, table_height)
+
+    draw_table_headers(svg)
+    draw_attention_rows(svg, weights, outputs)
+    write_svg(svg, table_height)
 
 
 if __name__ == "__main__":

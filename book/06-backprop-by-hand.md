@@ -513,25 +513,31 @@ void crossentropy_backward(Mat d_logits, Mat probs, const int *targets)
 {
     float mean_scale = 1.0f / (float)probs.rows;
 
-    for (int row = 0; row < probs.rows; row++) {
-        const float *prob     = mat_row(probs, row);
-        float       *d_logit  = mat_row(d_logits, row);
+    for (int row = 0; row < probs.rows; row++)
+        crossentropy_backward_row(mat_row(d_logits, row),
+                                  mat_row(probs, row), targets[row],
+                                  probs.cols, mean_scale);
+}
 
-        for (int c = 0; c < probs.cols; c++) {
-            float indicator = (c == targets[row]) ? 1.0f : 0.0f;
+static void crossentropy_backward_row(float *d_logits, const float *probs,
+                                      int target, int count,
+                                      float mean_scale)
+{
+    for (int channel = 0; channel < count; channel++) {
+        float target_probability = channel == target ? 1.0f : 0.0f;
 
-            d_logit[c] += (prob[c] - indicator) * mean_scale;
-        }
+        d_logits[channel] +=
+            (probs[channel] - target_probability) * mean_scale;
     }
 }
 ```
 
 `mean_scale` records that forward averaged rows. The outer loop selects
-matching probability and gradient rows. The conditional expression,
-first met in [Chapter
+matching probability and gradient rows, then gives one row to the
+small helper. Its conditional expression, first met in [Chapter
 2](02-foundations.md#fixed-integers-and-a-clock-that-does-not-turn-back),
-produces the numeric answer key. The final line subtracts that key,
-scales for the mean, and accumulates.
+produces the numeric answer key for one channel. The final line
+subtracts that key, scales for the mean, and accumulates.
 
 Backward reads the probabilities saved by
 `crossentropy_forward`; it does not read logits or recompute softmax.
@@ -1042,9 +1048,13 @@ void gelu_backward(Mat d_x, Mat d_out, Mat x)
         float value   = x.vals[i];
         float inner   = GELU_SQRT_2_OVER_PI * (value + GELU_CUBIC_COEFF * value * value * value);
         float tanh_of = tanhf(inner);
-        float d_inner = GELU_SQRT_2_OVER_PI * (1.0f + 3.0f * GELU_CUBIC_COEFF * value * value);
-        float slope   = 0.5f * (1.0f + tanh_of)
-                      + 0.5f * value * (1.0f - tanh_of * tanh_of) * d_inner;
+        float d_inner =
+            GELU_SQRT_2_OVER_PI
+            * (1.0f + CUBIC_DERIVATIVE_FACTOR * GELU_CUBIC_COEFF
+                          * value * value);
+        float slope = GELU_HALF * (1.0f + tanh_of)
+                    + GELU_HALF * value * (1.0f - tanh_of * tanh_of)
+                          * d_inner;
 
         d_x.vals[i] += slope * d_out.vals[i];
     }
@@ -1306,10 +1316,13 @@ typedef struct {
     float d_norm_norm_mean;
 } LayernormGradientMeans;
 
-static LayernormGradientMeans
-layernorm_gradient_means(const LayernormBackwardRow *row)
+static LayernormGradientMeans layernorm_gradient_means(
+    const LayernormBackwardRow *row)
 {
-    LayernormGradientMeans means = { 0.0f, 0.0f };
+    LayernormGradientMeans means = {
+        .d_norm_mean = 0.0f,
+        .d_norm_norm_mean = 0.0f,
+    };
 
     for (int c = 0; c < row->channels; c++) {
         float norm   = (row->input[c] - row->mean) * row->rstd;
@@ -1343,15 +1356,15 @@ static void layernorm_backward_row(const LayernormBackward *backward,
                                    int row)
 {
     LayernormBackwardRow backward_row = {
-        mat_row(backward->x, row),
-        mat_row(backward->d_out, row),
-        mat_row(backward->d_x, row),
-        backward->d_gain,
-        backward->d_bias,
-        backward->gain,
-        backward->x.cols,
-        backward->means[row],
-        backward->rstds[row],
+        .input = mat_row(backward->x, row),
+        .d_output = mat_row(backward->d_out, row),
+        .d_input = mat_row(backward->d_x, row),
+        .d_gain = backward->d_gain,
+        .d_bias = backward->d_bias,
+        .gain = backward->gain,
+        .channels = backward->x.cols,
+        .mean = backward->means[row],
+        .rstd = backward->rstds[row],
     };
     LayernormGradientMeans means =
         layernorm_gradient_means(&backward_row);
@@ -1363,8 +1376,16 @@ void layernorm_backward(Mat d_x, float *d_gain, float *d_bias, Mat d_out,
                         Mat x, const float *gain,
                         const float *means, const float *rstds)
 {
-    LayernormBackward backward =
-        { d_x, d_gain, d_bias, d_out, x, gain, means, rstds };
+    LayernormBackward backward = {
+        .d_x = d_x,
+        .d_gain = d_gain,
+        .d_bias = d_bias,
+        .d_out = d_out,
+        .x = x,
+        .gain = gain,
+        .means = means,
+        .rstds = rstds,
+    };
 
     for (int row = 0; row < x.rows; row++)
         layernorm_backward_row(&backward, row);
@@ -1649,19 +1670,29 @@ Chapter 5 walked the read-only
 This twin performs the same pointer arithmetic but returns a writable
 `float *` into the packed gradient row.
 
-Here are the position record, its three reverse stages, and the small
-`(sequence, head)` coordinator:
+Here are the shared backward record, the position and head records,
+their reverse stages, and the small `(sequence, head)` coordinator:
 
 ```c
+typedef struct {
+    Mat d_qkv;
+    Mat d_scores;
+    Mat d_out;
+    Mat qkv;
+    Mat scores;
+    int time;
+    int head_count;
+} AttentionBackward;
+
 typedef struct {
     Mat   d_qkv;
     Mat   qkv;
     const float *weights;
     float       *d_weights;
     const float *d_output;
-    int   seq;
+    int   sequence;
     int   offset;
-    int   t;
+    int   time_index;
     int   time;
     int   head_size;
     float scale;
@@ -1673,7 +1704,7 @@ typedef struct {
     Mat   d_out;
     Mat   qkv;
     Mat   scores;
-    int   seq;
+    int   sequence;
     int   head;
     int   time;
     int   head_count;
@@ -1682,106 +1713,121 @@ typedef struct {
     float scale;
 } AttentionBackwardHead;
 
-static void
-attention_value_backward(const AttentionBackwardPosition *position)
+static void attention_value_backward(
+    const AttentionBackwardPosition *position)
 {
     /* out = sum w[t2] v[t2], so each v earns w[t2] of the output
      * gradient and each w earns v . d_out. */
-    for (int t2 = 0; t2 <= position->t; t2++) {
-        position->d_weights[t2] =
+    for (int source = 0; source <= position->time_index; source++) {
+        position->d_weights[source] =
             dot(position->d_output,
                 qkv_slice(position->qkv,
-                          position->seq * position->time + t2,
+                          position->sequence * position->time + source,
                           VALUES, position->offset),
                 position->head_size);
         add_scaled(
             d_qkv_slice(position->d_qkv,
-                        position->seq * position->time + t2,
+                        position->sequence * position->time + source,
                         VALUES, position->offset),
-            position->weights[t2], position->d_output,
+            position->weights[source], position->d_output,
             position->head_size);
     }
 }
 
-static void
-attention_score_backward(const AttentionBackwardPosition *position)
+static void attention_score_backward(
+    const AttentionBackwardPosition *position)
 {
     /* raw[t2] = scale * (q . k[t2]) fans out to both sides. */
     const float *query =
         qkv_slice(position->qkv,
-                  position->seq * position->time + position->t,
+                  position->sequence * position->time
+                      + position->time_index,
                   QUERIES, position->offset);
     float *d_query =
         d_qkv_slice(position->d_qkv,
-                    position->seq * position->time + position->t,
+                    position->sequence * position->time
+                        + position->time_index,
                     QUERIES, position->offset);
 
-    for (int t2 = 0; t2 <= position->t; t2++) {
-        float d_raw = position->scale * position->d_weights[t2];
+    for (int source = 0; source <= position->time_index; source++) {
+        float d_raw = position->scale * position->d_weights[source];
 
         add_scaled(d_query, d_raw,
                    qkv_slice(position->qkv,
-                             position->seq * position->time + t2,
+                             position->sequence * position->time + source,
                              KEYS, position->offset),
                    position->head_size);
         add_scaled(
             d_qkv_slice(position->d_qkv,
-                        position->seq * position->time + t2,
+                        position->sequence * position->time + source,
                         KEYS, position->offset),
             d_raw, query, position->head_size);
     }
 }
 
-static void
-attention_position_backward(const AttentionBackwardHead *head, int t)
+static void attention_position_backward(const AttentionBackwardHead *head,
+                                        int time_index)
 {
     int score_row =
-        (head->seq * head->head_count + head->head) * head->time + t;
+        (head->sequence * head->head_count + head->head) * head->time
+        + time_index;
     AttentionBackwardPosition position = {
-        head->d_qkv,
-        head->qkv,
-        mat_row(head->scores, score_row),
-        mat_row(head->d_scores, score_row),
-        mat_row(head->d_out, head->seq * head->time + t) + head->offset,
-        head->seq,
-        head->offset,
-        t,
-        head->time,
-        head->head_size,
-        head->scale,
+        .d_qkv = head->d_qkv,
+        .qkv = head->qkv,
+        .weights = mat_row(head->scores, score_row),
+        .d_weights = mat_row(head->d_scores, score_row),
+        .d_output =
+            mat_row(head->d_out,
+                    head->sequence * head->time + time_index)
+            + head->offset,
+        .sequence = head->sequence,
+        .offset = head->offset,
+        .time_index = time_index,
+        .time = head->time,
+        .head_size = head->head_size,
+        .scale = head->scale,
     };
 
     attention_value_backward(&position);
     softmax_backward_in_place(position.d_weights, position.weights,
-                              t + 1);
+                              time_index + 1);
     attention_score_backward(&position);
 }
 
 /* The same (sequence, head) pair, unwound in reverse. */
-static void attention_head_backward(Mat d_qkv, Mat d_scores, Mat d_out,
-                                    Mat qkv, Mat scores, int seq, int head,
-                                    int time, int head_count)
+static void attention_head_backward(const AttentionBackward *backward,
+                                    int sequence, int head)
 {
-    int   head_size = d_out.cols / head_count;
+    int   head_size = backward->d_out.cols / backward->head_count;
     int   offset    = head * head_size;
     float scale     = 1.0f / sqrtf((float)head_size);
-    AttentionBackwardHead backward = {
-        d_qkv, d_scores, d_out, qkv, scores,
-        seq, head, time, head_count, head_size, offset, scale,
+    AttentionBackwardHead head_state = {
+        .d_qkv = backward->d_qkv,
+        .d_scores = backward->d_scores,
+        .d_out = backward->d_out,
+        .qkv = backward->qkv,
+        .scores = backward->scores,
+        .sequence = sequence,
+        .head = head,
+        .time = backward->time,
+        .head_count = backward->head_count,
+        .head_size = head_size,
+        .offset = offset,
+        .scale = scale,
     };
 
-    for (int t = 0; t < time; t++)
-        attention_position_backward(&backward, t);
+    for (int time_index = 0; time_index < backward->time; time_index++)
+        attention_position_backward(&head_state, time_index);
 }
 ```
 
-`AttentionBackwardHead` carries the arrays and geometry shared by all
-query positions in one head. `AttentionBackwardPosition` binds one
-query's saved weights, writable score scratch, arriving gradient, and
-head geometry.
+`AttentionBackward` carries the arrays and geometry shared by the whole
+operation. `AttentionBackwardHead` adds the geometry for one head.
+`AttentionBackwardPosition` binds one query's saved weights, writable
+score scratch, arriving gradient, and head geometry.
 
 `attention_value_backward` implements the worked value stage.
-Assignment into `d_weights[t2]` is safe because this scratch entry has
+Assignment into `d_weights[source]` is safe because this scratch entry has
 one producer. `add_scaled` uses `+=` for values because earlier values
 serve several queries.
 
@@ -1795,14 +1841,16 @@ In `attention_score_backward`, the local named `d_raw` multiplies by
 `d_dot` in the worked example. The two `add_scaled` calls send that
 coefficient to the query and key.
 
-Future scratch cells after `t` remain untouched and meaningless. No
-stage receives a bound larger than `t`, and no later code reads them.
+Future scratch cells after `time_index` remain untouched and
+meaningless. No stage receives a bound larger than `time_index`, and no
+later code reads them.
 The regression witness fills those cells with a sentinel and checks
 that it survives backward.
 
 `attention_head_backward` computes the head slice and forward scale,
-builds the shared record, and coordinates query positions in their
-original order.
+builds the head record, and coordinates query positions in their
+original order. The outer operation record also keeps this helper's
+parameter list short.
 
 The public wrapper is:
 
@@ -1811,14 +1859,22 @@ void attention_backward(Mat d_qkv, Mat d_scores, Mat d_out, Mat qkv,
                         Mat scores, int time, int head_count)
 {
     int sequence_count = d_out.rows / time;
+    AttentionBackward backward = {
+        .d_qkv = d_qkv,
+        .d_scores = d_scores,
+        .d_out = d_out,
+        .qkv = qkv,
+        .scores = scores,
+        .time = time,
+        .head_count = head_count,
+    };
 
-    /* (seq, head) pairs touch disjoint slices of d_qkv, so the pair
+    /* (sequence, head) pairs touch disjoint slices of d_qkv, so the pair
      * loop parallelizes; the t loops inside share those slices. */
     #pragma omp parallel for collapse(2) if(sequence_count * head_count >= PARALLEL_THRESHOLD)
-    for (int seq = 0; seq < sequence_count; seq++)
+    for (int sequence = 0; sequence < sequence_count; sequence++)
         for (int head = 0; head < head_count; head++)
-            attention_head_backward(d_qkv, d_scores, d_out, qkv, scores,
-                                    seq, head, time, head_count);
+            attention_head_backward(&backward, sequence, head);
 }
 ```
 

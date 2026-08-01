@@ -14,6 +14,18 @@
 static int checks;
 static int failures;
 
+static void expect(int condition, const char *message);
+static int close_float(float actual, float expected, float tolerance);
+static void check_embedding(void);
+static void check_layernorm(void);
+static void check_matmul(void);
+static void check_causal_attention(void);
+static void check_multihead_attention(void);
+static void check_attention(void);
+static void check_elementwise(void);
+static void check_probabilities(void);
+int main(void);
+
 static void expect(int condition, const char *message)
 {
     checks++;
@@ -107,7 +119,7 @@ static void check_matmul(void)
     expect(output[3] == -1.0f, "matmul row one, output one");
 }
 
-static void check_attention(void)
+static void check_causal_attention(void)
 {
     enum { TIME = 3, CHANNELS = 2, COLS = QKV_STREAMS * CHANNELS };
     float qkv_values[TIME * COLS] = {
@@ -140,7 +152,10 @@ static void check_attention(void)
 
     expect(memcmp(earlier, output, sizeof earlier) == 0,
            "future QKV cannot change an earlier output");
+}
 
+static void check_multihead_attention(void)
+{
     enum {
         HEAD_TIME = 2,
         HEAD_CHANNELS = 4,
@@ -161,6 +176,12 @@ static void check_attention(void)
            && two_head_output[6] == 20.0f
            && two_head_output[7] == 30.0f,
            "attention keeps head value slices isolated");
+}
+
+static void check_attention(void)
+{
+    check_causal_attention();
+    check_multihead_attention();
 }
 
 static void check_elementwise(void)

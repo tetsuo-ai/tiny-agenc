@@ -5,20 +5,26 @@
 # questions of voice, pacing, and explanation to human review.
 set -uo pipefail
 
-if LC_ALL=C.UTF-8 locale charmap 2>/dev/null | grep -qi '^UTF-8$'; then
-    export LC_ALL=C.UTF-8
-elif LC_ALL=C.utf8 locale charmap 2>/dev/null | grep -qi '^UTF-8$'; then
-    export LC_ALL=C.utf8
-else
-    printf 'check-book: a UTF-8 locale is required to measure diagrams\n'
-    exit 1
-fi
-
 REPOSITORY_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-cd "$REPOSITORY_ROOT" || exit 1
-
 failures=0
 em_dash=$'\u2014'
+MAX_DIAGRAM_COLUMNS=72
+FENCE_PATTERN='^[[:space:]]*(```|~~~)'
+MARKDOWN_LINK_PATTERN='\[([^][]*)\]\(([^()]*)\)'
+SYMBOL_LABEL_PATTERN='^`([A-Za-z_][A-Za-z0-9_]*)`$'
+
+choose_utf8_locale() {
+    if LC_ALL=C.UTF-8 locale charmap 2>/dev/null | grep -qi '^UTF-8$'; then
+        export LC_ALL=C.UTF-8
+        return
+    fi
+    if LC_ALL=C.utf8 locale charmap 2>/dev/null | grep -qi '^UTF-8$'; then
+        export LC_ALL=C.utf8
+        return
+    fi
+    printf 'check-book: a UTF-8 locale is required to measure diagrams\n'
+    exit 1
+}
 
 markdown_fragment_exists() {
     local path=$1
@@ -63,9 +69,10 @@ check_diagram_layout() {
 
         case "$text" in
             *'┌'*|*'┐'*|*'└'*|*'┘'*|*'│'*|*'├'*|*'┤'*|*'┬'*|*'┴'*|*'▼'*|*'▲'*|*'►'*)
-                if ((${#text} > 72)); then
-                    printf 'check-book: %s:%s: diagram line is %s columns; maximum is 72\n' \
-                        "$document" "$line_number" "${#text}"
+                if ((${#text} > MAX_DIAGRAM_COLUMNS)); then
+                    printf 'check-book: %s:%s: diagram line is %s columns; maximum is %s\n' \
+                        "$document" "$line_number" "${#text}" \
+                        "$MAX_DIAGRAM_COLUMNS"
                     failures=$((failures + 1))
                 fi
                 ;;
@@ -140,51 +147,122 @@ check_diagram_layout() {
     fi
 }
 
-mapfile -d '' markdown_files < <(
-    find . \
-        -path './.git' -prune -o \
-        -path './build' -prune -o \
-        -type f -name '*.md' -print0
-)
+check_source_link() {
+    local document=$1
+    local line_number=$2
+    local label=$3
+    local target=$4
+    local path=$5
+    local document_directory=$6
+    local symbol
 
-if matches=$(grep -nF -- "$em_dash" "${markdown_files[@]}"); then
-    printf '%s\n' "check-book: Unicode U+2014 em dash found:" "$matches"
+    if [[ $target =~ \#L[0-9] ]]; then
+        printf 'check-book: %s:%s: brittle source line anchor %s\n' \
+            "$document" "$line_number" "$target"
+        failures=$((failures + 1))
+    fi
+    if [[ ! $label =~ $SYMBOL_LABEL_PATTERN ]]; then
+        return
+    fi
+
+    symbol=${BASH_REMATCH[1]}
+    if grep -Eq "(^|[^A-Za-z0-9_])${symbol}([^A-Za-z0-9_]|$)" \
+            "$document_directory/$path"; then
+        return
+    fi
+    printf 'check-book: %s:%s: symbol %s is absent from %s\n' \
+        "$document" "$line_number" "$symbol" "$path"
     failures=$((failures + 1))
-fi
+}
 
-mapfile -d '' project_text_files < <(
-    find README.md CHANGELOG.md CONTRIBUTING.md MODEL_CARD.md NOTICE \
-         CITATION.cff VERSION .gitattributes .gitignore Makefile \
-         data/LICENSE.md \
-         book labs scripts src tests .github \
-         -type f ! -path '*/build/*' ! -path 'scripts/check-book.sh' -print0
-)
+check_line_fragment() {
+    local document=$1
+    local line_number=$2
+    local path=$3
+    local fragment=$4
+    local document_directory=$5
+    local first_line=$6
+    local last_line=$7
+    local target_lines
 
-if matches=$(
-    grep -nEi -- 'tiny[ -]?grok|grok\.bin|TGRK' \
-        "${project_text_files[@]}"
-); then
-    printf '%s\n' "check-book: retired project branding found:" "$matches"
+    target_lines=$(wc -l < "$document_directory/$path")
+    if ((first_line >= 1 && last_line >= first_line
+         && last_line <= target_lines)); then
+        return
+    fi
+    printf 'check-book: %s:%s: invalid line anchor %s for %s-line file\n' \
+        "$document" "$line_number" "$fragment" "$target_lines"
     failures=$((failures + 1))
-fi
+}
 
-release_version=$(tr -d '\r\n' < VERSION)
-if [[ ! $release_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-   || ! grep -qF "version: $release_version" CITATION.cff \
-   || ! grep -qF "## $release_version - " CHANGELOG.md; then
-    printf 'check-book: VERSION, CITATION.cff, and CHANGELOG.md disagree\n'
-    failures=$((failures + 1))
-fi
+check_document_link() {
+    local document=$1
+    local line_number=$2
+    local label=$3
+    local target=$4
+    local document_directory
+    local path
+    local fragment
+    local first_line
+    local last_line
 
-for document in "${markdown_files[@]}"; do
-    check_diagram_layout "$document"
+    if [[ $target == \<* ]]; then
+        target=${target#<}
+        target=${target%%>*}
+    else
+        target=${target%%[[:space:]]*}
+    fi
 
-    line_number=0
-    in_fence=0
-    fence_marker=
-    fence_pattern='^[[:space:]]*(```|~~~)'
-    markdown_link_pattern='\[([^][]*)\]\(([^()]*)\)'
-    symbol_label_pattern='^`([A-Za-z_][A-Za-z0-9_]*)`$'
+    case "$target" in
+        ""|\#*|//*) return ;;
+    esac
+    [[ $target =~ ^[A-Za-z][A-Za-z0-9+.-]*: ]] && return
+
+    path=${target%%#*}
+    path=${path%%\?*}
+    path=${path//\\ / }
+    [[ -n $path ]] || return
+
+    document_directory=$(dirname -- "$document")
+    if [[ ! -e "$document_directory/$path" ]]; then
+        printf 'check-book: %s:%s: missing local link target %s\n' \
+            "$document" "$line_number" "$target"
+        failures=$((failures + 1))
+        return
+    fi
+    if [[ $path == *.c || $path == *.h ]]; then
+        check_source_link "$document" "$line_number" "$label" "$target" \
+            "$path" "$document_directory"
+        return
+    fi
+    [[ $target == *#* ]] || return
+
+    fragment=${target#*#}
+    if [[ $fragment =~ ^L([0-9]+)(-L([0-9]+))?$ ]]; then
+        first_line=${BASH_REMATCH[1]}
+        last_line=${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}
+        check_line_fragment "$document" "$line_number" "$path" \
+            "$fragment" "$document_directory" "$first_line" "$last_line"
+        return
+    fi
+    if [[ $path == *.md ]] \
+       && ! markdown_fragment_exists "$document_directory/$path" "$fragment"; then
+        printf 'check-book: %s:%s: missing heading fragment %s in %s\n' \
+            "$document" "$line_number" "$fragment" "$path"
+        failures=$((failures + 1))
+    fi
+}
+
+check_document_links() {
+    local document=$1
+    local line_number=0
+    local in_fence=0
+    local fence_marker=
+    local text
+    local remainder
+    local full_match
+    local label
+    local target
 
     while IFS= read -r text || [[ -n $text ]]; do
         line_number=$((line_number + 1))
@@ -196,88 +274,18 @@ for document in "${markdown_files[@]}"; do
             fi
             continue
         fi
-        if [[ $text =~ $fence_pattern ]]; then
+        if [[ $text =~ $FENCE_PATTERN ]]; then
             in_fence=1
             fence_marker=${BASH_REMATCH[1]}
             continue
         fi
 
         remainder=$text
-
-        while [[ $remainder =~ $markdown_link_pattern ]]; do
+        while [[ $remainder =~ $MARKDOWN_LINK_PATTERN ]]; do
             full_match=${BASH_REMATCH[0]}
             label=${BASH_REMATCH[1]}
             target=${BASH_REMATCH[2]}
-
-            if [[ $target == \<* ]]; then
-                target=${target#<}
-                target=${target%%>*}
-            else
-                target=${target%%[[:space:]]*}
-            fi
-
-            case "$target" in
-                ""|\#*|//*)
-                    remainder=${remainder#*"$full_match"}
-                    continue
-                    ;;
-            esac
-            if [[ $target =~ ^[A-Za-z][A-Za-z0-9+.-]*: ]]; then
-                remainder=${remainder#*"$full_match"}
-                continue
-            fi
-
-            path=${target%%#*}
-            path=${path%%\?*}
-            path=${path//\\ / }
-            if [[ -z $path ]]; then
-                remainder=${remainder#*"$full_match"}
-                continue
-            fi
-
-            document_directory=$(dirname -- "$document")
-            if [[ ! -e "$document_directory/$path" ]]; then
-                printf 'check-book: %s:%s: missing local link target %s\n' \
-                    "$document" "$line_number" "$target"
-                failures=$((failures + 1))
-            elif [[ $path == *.c || $path == *.h ]]; then
-                if [[ $target =~ \#L[0-9] ]]; then
-                    printf 'check-book: %s:%s: brittle source line anchor %s\n' \
-                        "$document" "$line_number" "$target"
-                    failures=$((failures + 1))
-                fi
-                if [[ $label =~ $symbol_label_pattern ]]; then
-                    symbol=${BASH_REMATCH[1]}
-                    if ! grep -Eq \
-                        "(^|[^A-Za-z0-9_])${symbol}([^A-Za-z0-9_]|$)" \
-                        "$document_directory/$path"; then
-                        printf 'check-book: %s:%s: symbol %s is absent from %s\n' \
-                            "$document" "$line_number" "$symbol" "$path"
-                        failures=$((failures + 1))
-                    fi
-                fi
-            elif [[ $target == *#* ]]; then
-                fragment=${target#*#}
-
-                if [[ $fragment =~ ^L([0-9]+)(-L([0-9]+))?$ ]]; then
-                    first_line=${BASH_REMATCH[1]}
-                    last_line=${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}
-                    target_lines=$(wc -l < "$document_directory/$path")
-
-                    if ((first_line < 1 || last_line < first_line
-                         || last_line > target_lines)); then
-                        printf 'check-book: %s:%s: invalid line anchor %s for %s-line file\n' \
-                            "$document" "$line_number" "$fragment" "$target_lines"
-                        failures=$((failures + 1))
-                    fi
-                elif [[ $path == *.md ]] \
-                     && ! markdown_fragment_exists \
-                            "$document_directory/$path" "$fragment"; then
-                    printf 'check-book: %s:%s: missing heading fragment %s in %s\n' \
-                        "$document" "$line_number" "$fragment" "$path"
-                    failures=$((failures + 1))
-                fi
-            fi
+            check_document_link "$document" "$line_number" "$label" "$target"
             remainder=${remainder#*"$full_match"}
         done
     done < "$document"
@@ -286,22 +294,74 @@ for document in "${markdown_files[@]}"; do
         printf 'check-book: %s: unclosed Markdown code fence\n' "$document"
         failures=$((failures + 1))
     fi
-done
+}
 
-if matches=$(
-    grep -RniE --include='*.md' \
-        "the checked-in result|checked-in corpus's|current checked-in corpus" \
-        book
-); then
-    printf '%s\n' \
-        "check-book: generated data is described as checked in:" \
-        "$matches"
-    failures=$((failures + 1))
-fi
+main() {
+    local matches
+    local release_version
+    local document
+    local -a markdown_files
+    local -a project_text_files
 
-if ((failures > 0)); then
-    printf 'check-book: %d check group(s) failed\n' "$failures"
-    exit 1
-fi
+    choose_utf8_locale
+    cd "$REPOSITORY_ROOT" || exit 1
 
-printf 'check-book: Markdown links and mechanical prose checks passed\n'
+    mapfile -d '' markdown_files < <(
+        find . \
+            -path './.git' -prune -o \
+            -path './build' -prune -o \
+            -type f -name '*.md' -print0
+    )
+    if matches=$(grep -nF -- "$em_dash" "${markdown_files[@]}"); then
+        printf '%s\n' "check-book: Unicode U+2014 em dash found:" "$matches"
+        failures=$((failures + 1))
+    fi
+
+    mapfile -d '' project_text_files < <(
+        find README.md CHANGELOG.md CONTRIBUTING.md MODEL_CARD.md NOTICE \
+             CITATION.cff VERSION .gitattributes .gitignore Makefile \
+             data/LICENSE.md \
+             book labs scripts src tests .github \
+             -type f ! -path '*/build/*' \
+             ! -path 'scripts/check-book.sh' -print0
+    )
+    if matches=$(
+        grep -nEi -- 'tiny[ -]?grok|grok\.bin|TGRK' \
+            "${project_text_files[@]}"
+    ); then
+        printf '%s\n' "check-book: retired project branding found:" "$matches"
+        failures=$((failures + 1))
+    fi
+
+    release_version=$(tr -d '\r\n' < VERSION)
+    if [[ ! $release_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+       || ! grep -qF "version: $release_version" CITATION.cff \
+       || ! grep -qF "## $release_version - " CHANGELOG.md; then
+        printf 'check-book: VERSION, CITATION.cff, and CHANGELOG.md disagree\n'
+        failures=$((failures + 1))
+    fi
+
+    for document in "${markdown_files[@]}"; do
+        check_diagram_layout "$document"
+        check_document_links "$document"
+    done
+
+    if matches=$(
+        grep -RniE --include='*.md' \
+            "the checked-in result|checked-in corpus's|current checked-in corpus" \
+            book
+    ); then
+        printf '%s\n' \
+            "check-book: generated data is described as checked in:" \
+            "$matches"
+        failures=$((failures + 1))
+    fi
+
+    if ((failures > 0)); then
+        printf 'check-book: %d check group(s) failed\n' "$failures"
+        exit 1
+    fi
+    printf 'check-book: Markdown links and mechanical prose checks passed\n'
+}
+
+main "$@"

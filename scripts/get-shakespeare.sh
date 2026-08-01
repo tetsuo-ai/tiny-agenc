@@ -10,15 +10,16 @@ URL="https://raw.githubusercontent.com/karpathy/char-rnn/6f9487a6fe5b420b7ca9afb
 EXPECTED_SHA256="86c4e6aa9db7c042ec79f339dcb96d42b0075e16b8fc2e86bf0ca57e2dc565ed"
 OUT="${1:-data/shakespeare.txt}"
 
+cleanup() {
+    rm -f -- "$temp_file"
+    rmdir -- "$temp_dir" 2>/dev/null || true
+}
+
 out_dir="$(dirname "$OUT")"
 mkdir -p "$out_dir"
 temp_dir="$(mktemp -d "$out_dir/.tiny-agenc-data.XXXXXX")"
 temp_file="$temp_dir/shakespeare.txt"
 
-cleanup() {
-    rm -f -- "$temp_file"
-    rmdir -- "$temp_dir" 2>/dev/null || true
-}
 trap cleanup EXIT
 
 curl -sSfL "$URL" -o "$temp_file"

@@ -14,6 +14,31 @@
 static int checks;
 static int failures;
 
+enum {
+    FIRST_SEED = 1,
+    SEED_SEARCH_LIMIT = 10000,
+    MODEL_SEED = 17,
+    SAMPLE_SEED = 777,
+    PROMPT_TOKEN_COUNT = 1,
+};
+
+static const float DEFAULT_TEST_TEMPERATURE = 0.8f;
+static const float COLD_TEMPERATURE = 0.05f;
+static const float HOT_TEMPERATURE = 100.0f;
+static const float TEMPERATURE_DRAW_LOW = 0.90f;
+static const float TEMPERATURE_DRAW_HIGH = 0.95f;
+
+static void expect(int condition, const char *message);
+static int uniform_expected(Rng *rng, int vocab_size);
+static void zero_parameters(Model *model);
+static unsigned long long seed_with_first_draw_between(float low, float high);
+static void check_uniform_generation(void);
+static void check_one_id_consumes_one_draw(void);
+static Model *controlled_model(void);
+static void check_temperature(void);
+static void check_fresh_context(void);
+int main(void);
+
 static void expect(int condition, const char *message)
 {
     checks++;
@@ -51,7 +76,8 @@ static void zero_parameters(Model *model)
 
 static unsigned long long seed_with_first_draw_between(float low, float high)
 {
-    for (unsigned long long seed = 1; seed < 10000; seed++) {
+    for (unsigned long long seed = FIRST_SEED;
+         seed < SEED_SEARCH_LIMIT; seed++) {
         Rng  *rng = rng_new(seed);
         float draw = rng_uniform(rng);
 
@@ -74,7 +100,7 @@ static void check_uniform_generation(void)
         .layer_count = 1,
         .batch_size  = 1,
     };
-    Model *model = model_new(config, 17);
+    Model *model = model_new(config, MODEL_SEED);
 
     /* Zero parameters make every logit exactly equal. Sampling then has
      * a simple independent answer: walk five equal probability bins. */
@@ -85,19 +111,20 @@ static void check_uniform_generation(void)
 
     actual[0] = 0;
     expected[0] = 0;
-    for (int i = 1; i < TOTAL; i++) {
+    for (int i = PROMPT_TOKEN_COUNT; i < TOTAL; i++) {
         actual[i] = -1;
         expected[i] = -1;
     }
 
-    Rng *actual_rng = rng_new(777);
-    Rng *expected_rng = rng_new(777);
+    Rng *actual_rng = rng_new(SAMPLE_SEED);
+    Rng *expected_rng = rng_new(SAMPLE_SEED);
 
-    for (int i = 1; i < TOTAL; i++)
+    for (int i = PROMPT_TOKEN_COUNT; i < TOTAL; i++)
         expected[i] = uniform_expected(expected_rng, VOCAB);
-    model_sample(model, actual_rng, actual, 1, TOTAL, 0.8f);
+    model_sample(model, actual_rng, actual, PROMPT_TOKEN_COUNT, TOTAL,
+                 DEFAULT_TEST_TEMPERATURE);
 
-    for (int i = 1; i < TOTAL; i++) {
+    for (int i = PROMPT_TOKEN_COUNT; i < TOTAL; i++) {
         expect(actual[i] >= 0 && actual[i] < VOCAB,
                "sampling fills a valid vocabulary id");
         expect(actual[i] == expected[i],
@@ -119,13 +146,15 @@ static void check_one_id_consumes_one_draw(void)
         .layer_count = 1,
         .batch_size  = 1,
     };
-    Model *model = model_new(config, 17);
+    Model *model = model_new(config, MODEL_SEED);
     int ids[2] = { 0, -1 };
-    Rng *actual_rng = rng_new(777);
-    Rng *expected_rng = rng_new(777);
+    Rng *actual_rng = rng_new(SAMPLE_SEED);
+    Rng *expected_rng = rng_new(SAMPLE_SEED);
 
     (void)rng_uniform(expected_rng);
-    model_sample(model, actual_rng, ids, 1, 2, 0.8f);
+    model_sample(model, actual_rng, ids, PROMPT_TOKEN_COUNT,
+                 (int)(sizeof ids / sizeof ids[0]),
+                 DEFAULT_TEST_TEMPERATURE);
 
     expect(ids[1] == 0, "a one-id vocabulary can only select id zero");
     expect(rng_uniform(actual_rng) == rng_uniform(expected_rng),
@@ -143,6 +172,8 @@ static Model *controlled_model(void)
         NORM1_GAIN = 2,
         QKV_WEIGHTS = 4,
         PROJ_WEIGHTS = 5,
+        VALUE_FIRST_CHANNEL_ROW = 4,
+        VALUE_SECOND_CHANNEL_ROW = 5,
     };
     ModelConfig config = {
         .vocab_size  = 3,
@@ -152,7 +183,7 @@ static Model *controlled_model(void)
         .layer_count = 1,
         .batch_size  = 1,
     };
-    Model *model = model_new(config, 17);
+    Model *model = model_new(config, MODEL_SEED);
 
     zero_parameters(model);
 
@@ -174,8 +205,8 @@ static Model *controlled_model(void)
     mat_row(token_table, 1)[1] = 1.0f;
     norm1_gain.vals[0] = 1.0f;
     norm1_gain.vals[1] = 1.0f;
-    mat_row(qkv_weights, 4)[0] = 1.0f;
-    mat_row(qkv_weights, 5)[1] = 1.0f;
+    mat_row(qkv_weights, VALUE_FIRST_CHANNEL_ROW)[0] = 1.0f;
+    mat_row(qkv_weights, VALUE_SECOND_CHANNEL_ROW)[1] = 1.0f;
     mat_row(proj_weights, 0)[0] = 4.0f;
     mat_row(proj_weights, 1)[1] = 4.0f;
     final_gain.vals[0] = 1.0f;
@@ -186,14 +217,18 @@ static Model *controlled_model(void)
 static void check_temperature(void)
 {
     Model *model = controlled_model();
-    unsigned long long seed = seed_with_first_draw_between(0.90f, 0.95f);
+    unsigned long long seed =
+        seed_with_first_draw_between(TEMPERATURE_DRAW_LOW,
+                                     TEMPERATURE_DRAW_HIGH);
     int cold[2] = { 0, -1 };
     int hot[2] = { 0, -1 };
     Rng *cold_rng = rng_new(seed);
     Rng *hot_rng = rng_new(seed);
 
-    model_sample(model, cold_rng, cold, 1, 2, 0.05f);
-    model_sample(model, hot_rng, hot, 1, 2, 100.0f);
+    model_sample(model, cold_rng, cold, PROMPT_TOKEN_COUNT,
+                 (int)(sizeof cold / sizeof cold[0]), COLD_TEMPERATURE);
+    model_sample(model, hot_rng, hot, PROMPT_TOKEN_COUNT,
+                 (int)(sizeof hot / sizeof hot[0]), HOT_TEMPERATURE);
 
     expect(cold[1] == 0,
            "low temperature concentrates a nonuniform draw on the winner");
@@ -209,18 +244,28 @@ static void check_temperature(void)
 
 static void check_fresh_context(void)
 {
+    enum {
+        EVICTED_PROMPT_TOKENS = 6,
+        EXPLICIT_TAIL_TOKENS = 3,
+    };
     Model *model = controlled_model();
-    int evicted[7] = { 0, 0, 0, 1, 1, 0, -1 };
-    int explicit_tail[4] = { 1, 1, 0, -1 };
-    Rng *evicted_rng = rng_new(777);
-    Rng *tail_rng = rng_new(777);
+    int evicted[EVICTED_PROMPT_TOKENS + 1] =
+        { 0, 0, 0, 1, 1, 0, -1 };
+    int explicit_tail[EXPLICIT_TAIL_TOKENS + 1] = { 1, 1, 0, -1 };
+    Rng *evicted_rng = rng_new(SAMPLE_SEED);
+    Rng *tail_rng = rng_new(SAMPLE_SEED);
 
-    model_sample(model, evicted_rng, evicted, 6, 7, 0.05f);
-    model_sample(model, tail_rng, explicit_tail, 3, 4, 0.05f);
+    model_sample(model, evicted_rng, evicted, EVICTED_PROMPT_TOKENS,
+                 (int)(sizeof evicted / sizeof evicted[0]),
+                 COLD_TEMPERATURE);
+    model_sample(model, tail_rng, explicit_tail, EXPLICIT_TAIL_TOKENS,
+                 (int)(sizeof explicit_tail / sizeof explicit_tail[0]),
+                 COLD_TEMPERATURE);
 
-    expect(evicted[6] == 1,
+    expect(evicted[EVICTED_PROMPT_TOKENS] == 1,
            "a post-eviction draw uses information across the retained block");
-    expect(evicted[6] == explicit_tail[3],
+    expect(evicted[EVICTED_PROMPT_TOKENS]
+               == explicit_tail[EXPLICIT_TAIL_TOKENS],
            "eviction agrees with an explicit last-block reference");
 
     rng_free(evicted_rng);

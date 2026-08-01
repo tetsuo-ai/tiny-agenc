@@ -298,10 +298,31 @@ SHA-256 values
 and
 `0fc63e99d7eb837b2f3010e1942f43fc6bee33cd1496ed82f9220e639dec81ba`.
 
-The current source aggregate after that refactor is:
+The source aggregate after that refactor was:
 
 ```text
 2669c634617917a4099e67721e2c7eb5491058b6a49ee7b653963df05d349df0
+```
+
+A readability-only refactor was then compared directly with commit
+`d24f2225f4deb4b348c8f4bc82f70d0a6d426a04`. Both trees were built
+with GCC 13.3.0, OpenMP disabled, and the default `-O3 -ffast-math`
+flags. The same one-step, 50-step, and sampling replay above produced
+byte-identical checkpoints, sample output, and sample diagnostics with
+the four hashes recorded immediately above. The refactor's source
+aggregate is:
+
+```text
+972181bee42881bf10768343e28a498c9e2e50f985a2116d1c872d70c6b8c2d9
+```
+
+A follow-up separated `main` into runtime setup, top-level command-line
+dispatch, and subcommand dispatch. Repeating the one-step, 50-step, and
+sampling replay still produced the four hashes above. The current source
+aggregate is:
+
+```text
+ed9610c653190444cb7186ce550c48fc8127a6e6c149844f815939199b4c1e07
 ```
 
 ## Full-corpus showcase

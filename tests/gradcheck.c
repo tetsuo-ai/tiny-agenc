@@ -29,6 +29,7 @@
 static const float NUDGE              = 1e-2f;   /* h: clears float noise */
 static const float RELATIVE_TOLERANCE = 2e-2f;
 static const float ABSOLUTE_TOLERANCE = 1e-3f;
+static const float CENTRAL_DIFFERENCE_SPAN = 2.0f;
 
 /* Arbitrary but fixed, so every run checks the same numbers. */
 static const unsigned long long CHECK_SEED = 42;
@@ -36,6 +37,59 @@ static const unsigned long long MODEL_SEED = 7;
 
 static int checks;
 static int failures;
+
+typedef struct {
+    Mat out, u;
+    Mat x, w;                        /* matmul */
+    Mat gain, bias;                  /* layernorm */
+    float *means, *rstds;
+    Mat scores, qkv;                 /* attention */
+    int time, head_count;
+    Mat a, b;                        /* residual */
+    Mat token_table, position_table; /* embedding */
+    const int *tokens;
+    Mat probs, logits;               /* crossentropy */
+    const int *targets;
+} Case;
+
+typedef struct {
+    Model     *model;
+    const int *tokens, *targets;
+    int        batch, time;
+} ModelCase;
+
+static void compare(const char *label, float analytic, float numeric);
+static void expect(int condition, const char *label);
+static void nudge_all(const char *label, Mat target, Mat analytic,
+                      float (*measure)(void *), void *context);
+static Mat mat_new_gaussian(Rng *rng, int rows, int cols);
+static Mat mat_new_zeros(int rows, int cols);
+static float projected(Mat out, Mat u);
+static void fill(Mat matrix, float value);
+static void check_accumulated(const char *label, Mat actual, Mat contribution,
+                              float initial);
+static float measure_matmul(void *context);
+static void check_matmul(Rng *rng);
+static void check_matmul_accumulation(void);
+static float measure_layernorm(void *context);
+static void check_layernorm(Rng *rng);
+static float measure_attention(void *context);
+static void check_attention(Rng *rng);
+static float measure_gelu(void *context);
+static void check_gelu(Rng *rng);
+static float measure_residual(void *context);
+static void check_residual(Rng *rng);
+static float measure_embedding(void *context);
+static void check_embedding(Rng *rng);
+static float measure_crossentropy(void *context);
+static void check_crossentropy(Rng *rng);
+static float measure_model(void *context);
+static void check_model(Rng *rng);
+static void run_adamw_reference(const char *label, Param *p, AdamW opt,
+                                int steps, float decay, Rng *rng);
+static void check_adamw(Rng *rng);
+static void usage(const char *program);
+int main(int argc, char **argv);
 
 static void compare(const char *label, float analytic, float numeric)
 {
@@ -77,7 +131,8 @@ static void nudge_all(const char *label, Mat target, Mat analytic,
         float below = measure(context);
 
         target.vals[i] = saved;
-        compare(label, analytic.vals[i], (above - below) / (2.0f * NUDGE));
+        compare(label, analytic.vals[i],
+                (above - below) / (CENTRAL_DIFFERENCE_SPAN * NUDGE));
     }
 }
 
@@ -120,20 +175,6 @@ static void check_accumulated(const char *label, Mat actual,
 }
 
 /* -------- per-op checks -------- */
-
-typedef struct {
-    Mat out, u;
-    Mat x, w;                       /* matmul */
-    Mat gain, bias;                 /* layernorm */
-    float *means, *rstds;
-    Mat scores, qkv;                /* attention */
-    int time, head_count;
-    Mat a, b;                       /* residual */
-    Mat token_table, position_table;/* embedding */
-    const int *tokens;
-    Mat probs, logits;              /* crossentropy */
-    const int *targets;
-} Case;
 
 static float measure_matmul(void *context)
 {
@@ -396,12 +437,6 @@ static void check_crossentropy(Rng *rng)
 }
 
 /* -------- the whole model -------- */
-
-typedef struct {
-    Model     *model;
-    const int *tokens, *targets;
-    int        batch, time;
-} ModelCase;
 
 static float measure_model(void *context)
 {

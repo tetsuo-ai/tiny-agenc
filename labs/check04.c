@@ -12,6 +12,14 @@ static int checks;
 static int failures;
 static float death_storage[12];
 
+static void expect(int condition, const char *message);
+static void row_below_zero(void);
+static void row_at_end(void);
+static void view_below_zero(void);
+static void view_past_end(void);
+static int aborts(void (*operation)(void));
+int main(void);
+
 static void expect(int condition, const char *message)
 {
     checks++;

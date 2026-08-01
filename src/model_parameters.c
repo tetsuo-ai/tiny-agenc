@@ -5,6 +5,7 @@
 #include "util.h"
 
 static const float INIT_STDDEV = 0.02f;
+static const float RESIDUAL_VARIANCE_BRANCHES = 2.0f;
 
 typedef struct {
     Model *model;
@@ -14,18 +15,38 @@ typedef struct {
     float  residual_stddev;
 } ParameterCursor;
 
+static ParameterCursor parameter_registry_create(Model *m, Rng *rng);
+static void parameter_registry_add(ParameterCursor *cursor, Param **named,
+                                   Param *parameter);
+static void create_embedding_parameters(ParameterCursor *cursor);
+static void create_norm1_parameters(ParameterCursor *cursor, Block *block);
+static void create_attention_parameters(ParameterCursor *cursor,
+                                        Block *block);
+static void create_norm2_parameters(ParameterCursor *cursor, Block *block);
+static void create_mlp_parameters(ParameterCursor *cursor, Block *block);
+static void create_block_parameters(ParameterCursor *cursor, Block *block);
+static void create_all_block_parameters(ParameterCursor *cursor);
+static void create_final_parameters(ParameterCursor *cursor);
+
 static ParameterCursor parameter_registry_create(Model *m, Rng *rng)
 {
     ModelConfig cfg  = m->cfg;
     int         wide = MODEL_MLP_WIDENING * cfg.d_model;
     float residual_stddev =
-        INIT_STDDEV / sqrtf(2.0f * (float)cfg.layer_count);
+        INIT_STDDEV
+        / sqrtf(RESIDUAL_VARIANCE_BRANCHES * (float)cfg.layer_count);
 
     m->param_count =
         MODEL_TENSORS_ELSEWHERE + MODEL_TENSORS_PER_BLOCK * cfg.layer_count;
     m->params = emalloc((size_t)m->param_count * sizeof *m->params);
 
-    ParameterCursor cursor = { m, rng, 0, wide, residual_stddev };
+    ParameterCursor cursor = {
+        .model = m,
+        .rng = rng,
+        .at = 0,
+        .wide = wide,
+        .residual_stddev = residual_stddev,
+    };
 
     return cursor;
 }

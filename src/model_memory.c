@@ -15,9 +15,45 @@ typedef struct {
     size_t gradients;
 } ArenaLayout;
 
+enum {
+    PARAMETER_STORAGE_BUFFERS = 4,
+    TOKEN_CACHE_BUFFERS = 2,
+};
+
+static ArenaCursor arena_cursor(float *base, size_t capacity);
+static float *arena_take(ArenaCursor *cursor, size_t count);
+static Mat arena_place_mat(ArenaCursor *cursor, int rows, int cols);
+static float *arena_place_floats(ArenaCursor *cursor, size_t count);
+static void place_block_tensors(BlockTensors *bt, ArenaCursor *cursor,
+                                ModelConfig cfg);
+static void place_block_statistics(Block *block, ArenaCursor *cursor,
+                                   size_t rows);
+static void place_block_values(Block *block, ArenaCursor *cursor,
+                               ModelConfig cfg, size_t rows);
+static void place_value_views(Model *m, ArenaCursor *cursor);
+static void place_gradient_views(Model *m, ArenaCursor *cursor);
+static ArenaLayout measure_arena_layout(Model *m);
+static int memory_total_matches_components(ModelMemory memory);
+static int memory_report_matches_layout(const Model *m, ModelMemory memory,
+                                        ArenaLayout layout);
+static void require_matching_memory_report(const Model *m,
+                                           ModelMemory memory,
+                                           ArenaLayout layout);
+static void require_full_arena(ArenaCursor cursor);
+static Model *allocate_model_record(ModelConfig cfg);
+static void create_parameter_storage(Model *m, Rng *rng);
+static void create_value_arena(Model *m, size_t value_floats);
+static void create_gradient_arena(Model *m, size_t gradient_floats);
+static void create_token_caches(Model *m);
+static void create_model_storage(Model *m, ModelMemory memory);
+
 static ArenaCursor arena_cursor(float *base, size_t capacity)
 {
-    ArenaCursor cursor = { base, 0, capacity };
+    ArenaCursor cursor = {
+        .base = base,
+        .next = 0,
+        .capacity = capacity,
+    };
 
     return cursor;
 }
@@ -143,8 +179,8 @@ static int memory_total_matches_components(ModelMemory memory)
 static int memory_report_matches_layout(const Model *m, ModelMemory memory,
                                         ArenaLayout layout)
 {
-    size_t parameter_unit = 4 * sizeof(float);
-    size_t token_unit = 2 * sizeof(int);
+    size_t parameter_unit = PARAMETER_STORAGE_BUFFERS * sizeof(float);
+    size_t token_unit = TOKEN_CACHE_BUFFERS * sizeof(int);
     size_t max_tokens =
         (size_t)m->cfg.batch_size * (size_t)m->cfg.block_size;
 

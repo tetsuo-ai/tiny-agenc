@@ -24,12 +24,15 @@ enum {
 };
 
 static const float TWO_PI = 6.28318530717958647692f;
+static const float BOX_MULLER_RADIUS_FACTOR = -2.0f;
 
 struct Rng {
     uint64_t state;
     int      has_spare_gaussian;   /* Box-Muller yields two draws; bank one */
     float    spare_gaussian;
 };
+
+static uint32_t pcg32_next(Rng *rng);
 
 static uint32_t pcg32_next(Rng *rng)
 {
@@ -73,7 +76,9 @@ float rng_gaussian(Rng *rng)
 
     /* Box-Muller: two uniform draws become two independent gaussians.
      * 1 - u keeps the logarithm's argument in (0, 1], never zero. */
-    float radius = sqrtf(-2.0f * logf(1.0f - rng_uniform(rng)));
+    float radius =
+        sqrtf(BOX_MULLER_RADIUS_FACTOR
+              * logf(1.0f - rng_uniform(rng)));
     float angle  = TWO_PI * rng_uniform(rng);
 
     rng->spare_gaussian     = radius * sinf(angle);

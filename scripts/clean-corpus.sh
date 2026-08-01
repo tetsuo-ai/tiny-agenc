@@ -62,6 +62,11 @@ report() {
     done
 }
 
+cleanup() {
+    rm -f -- "$temp_file"
+    rmdir -- "$temp_dir" 2>/dev/null || true
+}
+
 if [ ! -r "$RAW_FILE" ]; then
     echo "clean-corpus: cannot read $RAW_FILE" >&2
     exit 1
@@ -79,10 +84,6 @@ mkdir -p "$clean_dir"
 temp_dir="$(mktemp -d "$clean_dir/.tiny-agenc-clean.XXXXXX")"
 temp_file="$temp_dir/corpus"
 
-cleanup() {
-    rm -f -- "$temp_file"
-    rmdir -- "$temp_dir" 2>/dev/null || true
-}
 trap cleanup EXIT
 
 to_ascii < "$RAW_FILE" | apply_grammar | squeeze_blank_runs > "$temp_file"

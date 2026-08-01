@@ -10,6 +10,10 @@
 
 static const double NANOSECONDS_PER_SECOND = 1e9;
 
+static FileSlurpStatus measure_file(FILE *stream, size_t maximum,
+                                    size_t *length);
+static int read_exact_file(FILE *stream, char *contents, size_t length);
+
 void *emalloc(size_t size)
 {
     void *block = malloc(size);

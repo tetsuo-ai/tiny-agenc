@@ -102,18 +102,8 @@ def points_string(points):
     return " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
 
 
-def main():
-    reports = read_reports()
-    training_points = [
-        (plot_x(step), plot_y(training))
-        for step, training, _ in reports
-    ]
-    validation_points = [
-        (plot_x(step), plot_y(validation))
-        for step, _, validation in reports
-    ]
-
-    svg = [
+def start_svg():
+    return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
@@ -196,6 +186,8 @@ def main():
         ),
     ]
 
+
+def draw_axes(svg):
     for loss in (0.5, 1.0, 2.0, 3.0, 4.0):
         y = plot_y(loss)
         svg.append(line(LEFT, y, WIDTH - RIGHT, y, "grid"))
@@ -218,17 +210,19 @@ def main():
                 "axis-label",
                 "start",
             ),
-            (
-                f'  <polyline points="{points_string(training_points)}" '
-                'class="training"/>'
-            ),
-            (
-                f'  <polyline points="{points_string(validation_points)}" '
-                'class="validation"/>'
-            ),
         )
     )
 
+
+def draw_loss_curves(svg, training_points, validation_points):
+    svg.append(
+        f'  <polyline points="{points_string(training_points)}" '
+        'class="training"/>'
+    )
+    svg.append(
+        f'  <polyline points="{points_string(validation_points)}" '
+        'class="validation"/>'
+    )
     for x, y in training_points:
         svg.append(
             f'  <circle cx="{x:.2f}" cy="{y:.2f}" r="4" '
@@ -240,6 +234,8 @@ def main():
             f'fill="{VALIDATION}" stroke="{PANEL}" stroke-width="1"/>'
         )
 
+
+def draw_final_callout(svg, training_points, validation_points):
     final_training_x, final_training_y = training_points[-1]
     final_validation_x, final_validation_y = validation_points[-1]
     callout_x = 560
@@ -282,6 +278,9 @@ def main():
             "callout-line",
         )
     )
+
+
+def write_svg(svg):
     svg.append(
         text(
             44,
@@ -296,6 +295,24 @@ def main():
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as output:
         output.write("\n".join(svg) + "\n")
+
+
+def main():
+    reports = read_reports()
+    training_points = [
+        (plot_x(step), plot_y(training))
+        for step, training, _ in reports
+    ]
+    validation_points = [
+        (plot_x(step), plot_y(validation))
+        for step, _, validation in reports
+    ]
+
+    svg = start_svg()
+    draw_axes(svg)
+    draw_loss_curves(svg, training_points, validation_points)
+    draw_final_callout(svg, training_points, validation_points)
+    write_svg(svg)
 
 
 if __name__ == "__main__":

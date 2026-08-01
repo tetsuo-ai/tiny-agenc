@@ -422,7 +422,8 @@ Scanning the vocabulary for every input byte would repeat work. Two
 tables make either answer one array lookup. Here is the private
 representation and construction from
 [`tokenizer.c`](../src/tokenizer.c). The excerpt is shortened to the
-constants, tables, and constructors:
+constants, tables, and constructors; the private routine map between
+the record and the first helper is omitted:
 
 ```c
 enum {
@@ -1216,6 +1217,12 @@ allocating `B*T` slots for each array. It allocates `inputs` and
 `targets` as two distinct, non-overlapping buffers; this function
 relies on that caller contract.
 
+The file names the one-position relationship first:
+
+```c
+enum { NEXT_TOKEN_OFFSET = 1 };
+```
+
 Here is the complete batch function:
 
 ```c
@@ -1223,16 +1230,20 @@ void dataset_batch(const Dataset *ds, Rng *rng, int *inputs, int *targets,
                    int batch_size, int block_size)
 {
     /* A run starting at s uses tokens s .. s+block_size as input and
-     * target, so the last legal start is token_count - block_size - 1. */
-    assert(ds->token_count >= (size_t)block_size + 1);
+     * target, so the final answer determines the last legal start. */
+    assert(ds->token_count
+           >= (size_t)block_size + NEXT_TOKEN_OFFSET);
 
-    int last_start = (int)(ds->token_count - (size_t)block_size - 1);
+    int last_start =
+        (int)(ds->token_count - (size_t)block_size - NEXT_TOKEN_OFFSET);
 
     for (int row = 0; row < batch_size; row++) {
-        const int *run = ds->tokens + rng_below(rng, last_start + 1);
+        const int *run =
+            ds->tokens + rng_below(rng, last_start + NEXT_TOKEN_OFFSET);
 
         memcpy(inputs + row * block_size, run, (size_t)block_size * sizeof *inputs);
-        memcpy(targets + row * block_size, run + 1, (size_t)block_size * sizeof *targets);
+        memcpy(targets + row * block_size, run + NEXT_TOKEN_OFFSET,
+               (size_t)block_size * sizeof *targets);
     }
 }
 ```
@@ -1244,17 +1255,20 @@ precondition, the `assert` enforces the `T + 1` requirement. Converting
 `block_size` to `size_t` makes the comparison use the same unsigned
 size type as `token_count`.
 
-`last_start` implements the arithmetic from the ten-token example. The
-earlier `INT_MAX` ceiling makes the cast back to `int` representable.
-Passing `last_start + 1` to `rng_below` includes both endpoint starts.
-At the last legal start, `start + block_size` is
+`NEXT_TOKEN_OFFSET` names the one-position shift from each input to its
+answer. `last_start` implements the arithmetic from the ten-token
+example. The earlier `INT_MAX` ceiling makes the cast back to `int`
+representable. Passing `last_start + NEXT_TOKEN_OFFSET` to `rng_below`
+includes both endpoint starts. At the last legal start,
+`start + block_size` is
 `token_count - 1`, the final real array element rather than the
 one-past position.
 
 The expression `ds->tokens + start` applies the pointer arithmetic from
 the worked start. Adding one to an `int *` advances by one complete
 `int`, not one raw byte. If the draw is 5, `run` points at the token
-occurrence in source position 5, whose stored id is 4. `run + 1` points
+occurrence in source position 5, whose stored id is 4.
+`run + NEXT_TOKEN_OFFSET` points
 at position 6, whose id is 6. The same rule makes
 `inputs + row * block_size` point at the first integer slot for that
 flattened row.
@@ -1265,8 +1279,8 @@ valid, non-overlapping storage. The two destination buffers and
 first call copies `block_size` integers from `run` into the selected
 input row. Multiplying by `sizeof *inputs` converts that integer count
 into a byte count. The second call copies the same number of integers
-beginning at `run + 1`, which creates the shifted target row. This
-fixed-size operation is the byte copy constructed above.
+beginning at `run + NEXT_TOKEN_OFFSET`, which creates the shifted target
+row. This fixed-size operation is the byte copy constructed above.
 
 Nothing marks start 5 as used. The next row draws from all seven starts
 again and could also choose 5. This is the replacement behavior from
