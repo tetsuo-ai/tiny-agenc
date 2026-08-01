@@ -1,8 +1,13 @@
+/*
+ * checkpoint.c -- the TAGC version 1 checkpoint: CRC32-sealed
+ * serialization, atomic durable save, and fully verified load.
+ */
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 #define _POSIX_C_SOURCE 200809L
 
 #include <acl/libacl.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -40,9 +45,13 @@ enum {
     LOWEST_DUPLICATE_DESCRIPTOR = 0,
 };
 
+#define TEMP_NAME_PREFIX ".tiny-agenc-"
+
 static const uint32_t CRC32_POLYNOMIAL = 0xEDB88320u;
 static const uint32_t CRC32_INITIAL = 0xFFFFFFFFu;
 
+/* Application order: regular attributes, then the capability blob,
+ * then the SELinux label. */
 typedef enum {
     XATTR_REGULAR_STAGE,
     XATTR_CAPABILITY_STAGE,
@@ -50,6 +59,7 @@ typedef enum {
     XATTR_STAGE_COUNT,
 } XattrApplyStage;
 
+/* file_bytes = the fixed envelope + vocabulary + parameter_bytes. */
 typedef struct {
     ModelMemory memory;
     size_t      parameter_floats;
@@ -57,12 +67,14 @@ typedef struct {
     size_t      file_bytes;
 } CheckpointLayout;
 
+/* One captured attribute; value holds size bytes owned here. */
 typedef struct {
     char   *name;
     void   *value;
     size_t  size;
 } SavedXattr;
 
+/* xattr_count counts the entries owned by the xattrs array. */
 typedef struct {
     uid_t       uid;
     gid_t       gid;
@@ -72,6 +84,8 @@ typedef struct {
     size_t      xattr_count;
 } CheckpointMetadata;
 
+/* target_stat describes the file target names; target, when open
+ * (>= 0), is that same inode held for later identity checks. */
 typedef struct {
     char       *directory_name;
     char       *name;
@@ -81,11 +95,14 @@ typedef struct {
     struct stat target_stat;
 } SavePath;
 
+/* A nonempty temp_name names an on-disk temporary owned by this
+ * transaction until renamed is set.  temp_stat is valid once
+ * has_temp_identity is set. */
 typedef struct {
     SavePath           path;
     CheckpointMetadata metadata;
     char                temp_name[
-        sizeof ".tiny-agenc-" + HEX_DIGITS_PER_BYTE * TEMP_RANDOM_BYTES];
+        sizeof TEMP_NAME_PREFIX + HEX_DIGITS_PER_BYTE * TEMP_RANDOM_BYTES];
     int                 temp_descriptor;
     int                 temp_identity_descriptor;
     FILE               *stream;
@@ -94,6 +111,7 @@ typedef struct {
     int                 renamed;
 } SaveTransaction;
 
+/* stream, when open, reads from snapshot, which must outlive it. */
 typedef struct {
     char      *snapshot;
     size_t     snapshot_size;
@@ -102,88 +120,232 @@ typedef struct {
     Model     *model;
 } LoadCandidate;
 
+/* Byte size of the header, tokenizer-size, and checksum words. */
 static size_t checkpoint_fixed_bytes(void);
+
+/* Computes the exact file and resident sizes for cfg.  Returns 0
+ * when any size overflows or exceeds a checkpoint resource limit. */
 static int checkpoint_layout(ModelConfig cfg, CheckpointLayout *layout);
+
+/* Folds count bytes into a running reflected CRC32.  Pure. */
 static uint32_t crc32_update(uint32_t crc, const unsigned char *bytes,
                              size_t count);
+
+/* Rewinds stream and checksums its first length bytes. */
 static int crc32_prefix(FILE *stream, off_t length, uint32_t *result);
+
+/* Seals the payload written so far by appending its CRC32. */
 static int append_checksum(FILE *stream);
+
+/* True when the trailing checksum matches the bytes before it. */
 static int snapshot_checksum_matches(const char *snapshot, size_t size);
+
+/* Writes magic, version, and the six config dimensions. */
 static int write_checkpoint_header(FILE *stream, const Model *m);
+
+/* Writes every parameter tensor in registry order. */
 static int write_checkpoint_parameters(FILE *stream, const Model *m);
+
+/* Writes the complete checkpoint: header, tokenizer, parameters,
+ * checksum. */
 static int write_checkpoint(FILE *stream, const Model *m,
                             const Tokenizer *tk);
+
+/* Copies length bytes of text into a fresh NUL-terminated string.
+ * Never returns NULL; allocation failure dies. */
 static char *copy_string_range(const char *text, size_t length);
+
+/* Resets path to hold no names and no open descriptors. */
 static void save_path_init(SavePath *path);
+
+/* Splits path into owned directory and file name copies.  Rejects
+ * empty paths and ".", "..", or empty final components. */
 static int split_save_path(SavePath *save_path, const char *path);
+
+/* Records whether the destination exists and is a regular file. */
 static int stat_destination(SavePath *path);
+
+/* True when observed and expected name the same regular file.
+ * Pure. */
+static int stat_identity_matches(const struct stat *observed,
+                                 const struct stat *expected);
+
+/* Opens the existing destination and verifies it is still the
+ * file stat_destination saw. */
 static int open_existing_destination(SavePath *path);
+
+/* Opens the destination directory and any existing target file. */
 static int prepare_save_path(SavePath *save_path, const char *path);
+
+/* True when the destination name still maps to the opened target. */
 static int destination_identity_matches(const SavePath *path);
+
+/* Closes descriptors and frees names, then reinitializes path. */
 static void save_path_free(SavePath *path);
+
+/* True for the POSIX access ACL alias managed through acl_get_fd. */
 static int xattr_is_posix_access_acl(const char *name);
+
+/* True for attribute families a faithful copy cannot preserve. */
 static int xattr_is_unsupported(const char *name);
+
+/* Reads the NUL-separated xattr name list into an owned buffer.
+ * Both outputs are empty when the file has no attributes. */
 static int read_xattr_names(int descriptor, char **names, size_t *size);
+
+/* Counts the names this module copies.  Rejects malformed lists
+ * and unsupported attribute families. */
 static int count_managed_xattrs(const char *names, size_t size,
                                 size_t *count);
+
+/* Reads one attribute value into an owned buffer. */
 static int read_xattr_value(int descriptor, const char *name,
                             void **value, size_t *size);
+
+/* Captures one attribute name and value into saved.  Leaves saved
+ * empty on failure. */
 static int capture_one_xattr(int descriptor, const char *name,
                              SavedXattr *saved);
+
+/* Frees every captured attribute and empties the list. */
 static void free_saved_xattrs(CheckpointMetadata *metadata);
+
+/* Captures every managed name from the list into metadata. */
 static int capture_named_xattrs(int descriptor, const char *names,
                                 size_t names_size,
                                 CheckpointMetadata *metadata);
+
+/* Captures every managed attribute of the open file. */
 static int capture_xattrs(int descriptor, CheckpointMetadata *metadata);
+
+/* Captures ownership, permissions, the access ACL, and attributes. */
 static int capture_metadata(int descriptor, CheckpointMetadata *metadata);
+
+/* Finds a captured attribute by name; NULL when absent. */
 static const SavedXattr *find_saved_xattr(
     const CheckpointMetadata *metadata, const char *name);
+
+/* Stage in which one attribute is applied.  Pure. */
 static XattrApplyStage xattr_apply_stage(const char *name);
+
+/* Applies every captured attribute belonging to one stage. */
+static int apply_stage_xattrs(int descriptor,
+                              const CheckpointMetadata *metadata,
+                              XattrApplyStage stage);
+
+/* Applies every captured attribute in staged order. */
 static int apply_saved_xattrs(int descriptor,
                               const CheckpointMetadata *metadata);
+
+/* Removes attributes the file has but the capture does not. */
 static int remove_unmatched_xattrs(
     int descriptor, const CheckpointMetadata *metadata);
+
+/* True when the file carries saved with an identical value. */
 static int saved_xattr_matches(int descriptor, const SavedXattr *saved);
+
+/* True when the file's managed attributes equal the capture. */
 static int xattrs_match(int descriptor,
                         const CheckpointMetadata *metadata);
+
+/* True when ownership, permissions, ACL, and attributes all match. */
 static int metadata_matches(int descriptor,
                             const CheckpointMetadata *metadata);
+
+/* Applies the captured metadata and verifies the result took. */
 static int apply_metadata(int descriptor,
                           const CheckpointMetadata *metadata);
+
+/* Releases the ACL and captured attributes. */
 static void metadata_free(CheckpointMetadata *metadata);
+
+/* Fills bytes with kernel randomness.  Retries short reads and
+ * EINTR; fails on any other getrandom error. */
 static int random_bytes(unsigned char *bytes, size_t count);
+
+/* Renders the hidden temporary name: prefix plus hex random. */
 static void format_temp_name(
     char *name, const unsigned char random[TEMP_RANDOM_BYTES]);
+
+/* Duplicates the temporary descriptor and records its identity so
+ * later name checks can prove the inode is still ours. */
 static int record_temporary_identity(SaveTransaction *transaction);
+
+/* Unlinks and closes the temporary file, preserving saved_error. */
 static void discard_temporary_file(SaveTransaction *transaction,
                                    int saved_error);
+
+/* Creates an exclusively owned temporary file beside the target. */
 static int create_temporary_file(SaveTransaction *transaction);
+
+/* True when name still refers to the recorded temporary inode. */
 static int path_matches_temporary_file(const SaveTransaction *transaction,
                                        const char *name);
+
+/* Resets the transaction to hold no resources. */
 static void transaction_init(SaveTransaction *transaction);
+
+/* Closes the buffered stream exactly once, surfacing write errors. */
 static int transaction_close_stream(SaveTransaction *transaction);
+
+/* Stages the save: destination state captured, temporary stream
+ * open for writing. */
 static int prepare_transaction(SaveTransaction *transaction,
                                const char *path);
+
+/* Turns the temporary file into a fully written, synced replacement
+ * candidate carrying the destination's metadata. */
 static int prepare_temporary_checkpoint(
     SaveTransaction *transaction, const Model *m, const Tokenizer *tk);
+
+/* Closes the opened destination after proving it is unchanged. */
 static int close_original_destination(SaveTransaction *transaction);
+
+/* Renames the verified temporary file onto the destination name. */
 static int commit_temporary_checkpoint(SaveTransaction *transaction);
+
+/* Syncs the directory so the rename is durable, not just visible. */
 static ModelSaveResult confirm_directory_update(
     SaveTransaction *transaction);
+
+/* Unlinks the temporary file when it never reached the target. */
 static void remove_uncommitted_temporary_file(
     SaveTransaction *transaction);
+
+/* Releases every resource still held, committed or not. */
 static void transaction_cleanup(SaveTransaction *transaction);
+
+/* Reads one header dimension into a plain int. */
 static int read_dimension(FILE *stream, int *value);
+
+/* Reads magic, version, and config, then validates the geometry. */
 static int read_config(FILE *stream, ModelConfig *cfg);
+
+/* Resets the candidate to hold no resources. */
 static void load_candidate_init(LoadCandidate *candidate);
+
+/* Releases whatever the failed or finished load still holds. */
 static void load_candidate_free(LoadCandidate *candidate);
+
+/* Reads the whole file and verifies its checksum before parsing. */
 static int load_snapshot(LoadCandidate *candidate, const char *path);
+
+/* True when snapshot plus model memory fit the resident limit. */
 static int snapshot_fits_resident_limit(
     const LoadCandidate *candidate, const CheckpointLayout *layout);
+
+/* Parses the header, sizes the file exactly, and builds the empty
+ * tokenizer and model the parameters will fill. */
 static int load_header_and_tokenizer(
     LoadCandidate *candidate, CheckpointLayout *layout);
+
+/* Reads every parameter tensor in registry order. */
 static int load_checkpoint_parameters(LoadCandidate *candidate);
+
+/* Consumes the checksum, requires EOF, and closes the stream. */
 static int consume_checkpoint_trailer(LoadCandidate *candidate);
+
+/* Hands the finished model and tokenizer to the caller. */
 static Model *publish_load_candidate(LoadCandidate *candidate,
                                      Tokenizer **tokenizer);
 
@@ -321,6 +483,7 @@ static char *copy_string_range(const char *text, size_t length)
 {
     char *copy = emalloc(length + 1);
 
+    assert(text != NULL);
     memcpy(copy, text, length);
     copy[length] = '\0';
     return copy;
@@ -339,6 +502,7 @@ static int split_save_path(SavePath *save_path, const char *path)
     const char *slash = strrchr(path, '/');
     const char *name = slash == NULL ? path : slash + 1;
 
+    assert(save_path->directory_name == NULL && save_path->name == NULL);
     if (length == 0 || name[0] == '\0'
         || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
         return -1;
@@ -358,6 +522,7 @@ static int split_save_path(SavePath *save_path, const char *path)
 
 static int stat_destination(SavePath *path)
 {
+    assert(path->directory >= 0);
     if (fstatat(path->directory, path->name, &path->target_stat,
                 AT_SYMLINK_NOFOLLOW) == 0) {
         path->target_exists = 1;
@@ -367,6 +532,14 @@ static int stat_destination(SavePath *path)
         return -1;
     path->target_exists = 0;
     return 0;
+}
+
+static int stat_identity_matches(const struct stat *observed,
+                                 const struct stat *expected)
+{
+    return S_ISREG(observed->st_mode)
+        && observed->st_dev == expected->st_dev
+        && observed->st_ino == expected->st_ino;
 }
 
 static int open_existing_destination(SavePath *path)
@@ -382,16 +555,16 @@ static int open_existing_destination(SavePath *path)
 
     struct stat opened;
 
-    if (fstat(path->target, &opened) != 0 || !S_ISREG(opened.st_mode)
-        || opened.st_dev != path->target_stat.st_dev
-        || opened.st_ino != path->target_stat.st_ino)
+    if (fstat(path->target, &opened) != 0
+        || !stat_identity_matches(&opened, &path->target_stat))
         return -1;
     return 0;
 }
 
 static int prepare_save_path(SavePath *save_path, const char *path)
 {
-    if (path == NULL || split_save_path(save_path, path) != 0)
+    assert(path != NULL);
+    if (split_save_path(save_path, path) != 0)
         return -1;
 
     save_path->directory =
@@ -411,9 +584,7 @@ static int destination_identity_matches(const SavePath *path)
     if (fstatat(path->directory, path->name, &current,
                 AT_SYMLINK_NOFOLLOW) != 0)
         return 0;
-    return S_ISREG(current.st_mode)
-        && current.st_dev == path->target_stat.st_dev
-        && current.st_ino == path->target_stat.st_ino;
+    return stat_identity_matches(&current, &path->target_stat);
 }
 
 static void save_path_free(SavePath *path)
@@ -556,6 +727,7 @@ static int capture_named_xattrs(int descriptor, const char *names,
         position += length + 1;
         if (xattr_is_posix_access_acl(name))
             continue;
+        assert(metadata->xattrs != NULL);
         if (capture_one_xattr(descriptor, name,
                               &metadata->xattrs[saved]) != 0) {
             metadata->xattr_count = saved;
@@ -625,19 +797,29 @@ static XattrApplyStage xattr_apply_stage(const char *name)
     return XATTR_REGULAR_STAGE;
 }
 
+static int apply_stage_xattrs(int descriptor,
+                              const CheckpointMetadata *metadata,
+                              XattrApplyStage stage)
+{
+    for (size_t i = 0; i < metadata->xattr_count; i++) {
+        const SavedXattr *xattr = &metadata->xattrs[i];
+
+        if (xattr_apply_stage(xattr->name) != stage)
+            continue;
+        if (fsetxattr(descriptor, xattr->name, xattr->value,
+                      xattr->size, 0) != 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int apply_saved_xattrs(int descriptor,
                               const CheckpointMetadata *metadata)
 {
     for (XattrApplyStage stage = XATTR_REGULAR_STAGE;
          stage < XATTR_STAGE_COUNT; stage++) {
-        for (size_t i = 0; i < metadata->xattr_count; i++) {
-            const SavedXattr *xattr = &metadata->xattrs[i];
-
-            if (xattr_apply_stage(xattr->name) == stage
-                && fsetxattr(descriptor, xattr->name, xattr->value,
-                             xattr->size, 0) != 0)
-                return -1;
-        }
+        if (apply_stage_xattrs(descriptor, metadata, stage) != 0)
+            return -1;
     }
     return 0;
 }
@@ -715,7 +897,6 @@ static int metadata_matches(int descriptor,
                             const CheckpointMetadata *metadata)
 {
     struct stat status;
-    acl_t access_acl;
 
     if (fstat(descriptor, &status) != 0
         || status.st_uid != metadata->uid
@@ -723,7 +904,8 @@ static int metadata_matches(int descriptor,
         || (status.st_mode & FILE_PERMISSION_MASK) != metadata->mode)
         return 0;
 
-    access_acl = acl_get_fd(descriptor);
+    acl_t access_acl = acl_get_fd(descriptor);
+
     if (access_acl == NULL)
         return 0;
     int acl_matches = acl_cmp(access_acl, metadata->access_acl) == 0;
@@ -774,10 +956,9 @@ static void format_temp_name(char *name,
                              const unsigned char random[TEMP_RANDOM_BYTES])
 {
     static const char HEX[] = "0123456789abcdef";
-    static const char PREFIX[] = ".tiny-agenc-";
-    size_t prefix_length = sizeof PREFIX - 1;
+    size_t prefix_length = sizeof TEMP_NAME_PREFIX - 1;
 
-    memcpy(name, PREFIX, prefix_length);
+    memcpy(name, TEMP_NAME_PREFIX, prefix_length);
     for (size_t i = 0; i < TEMP_RANDOM_BYTES; i++) {
         name[prefix_length + HEX_DIGITS_PER_BYTE * i] =
             HEX[random[i] >> HEX_NIBBLE_BITS];
@@ -789,6 +970,7 @@ static void format_temp_name(char *name,
 
 static int record_temporary_identity(SaveTransaction *transaction)
 {
+    assert(transaction->temp_descriptor >= 0);
     transaction->temp_identity_descriptor =
         fcntl(transaction->temp_descriptor, F_DUPFD_CLOEXEC,
               LOWEST_DUPLICATE_DESCRIPTOR);
@@ -808,6 +990,7 @@ static int record_temporary_identity(SaveTransaction *transaction)
 static void discard_temporary_file(SaveTransaction *transaction,
                                    int saved_error)
 {
+    assert(transaction->temp_descriptor >= 0);
     if (transaction->temp_identity_descriptor >= 0)
         close(transaction->temp_identity_descriptor);
     transaction->temp_identity_descriptor = -1;
@@ -831,11 +1014,10 @@ static int create_temporary_file(SaveTransaction *transaction)
             openat(transaction->path.directory, transaction->temp_name,
                    O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC,
                    PRIVATE_FILE_MODE);
-        if (transaction->temp_descriptor < 0) {
-            if (errno == EEXIST)
-                continue;
+        if (transaction->temp_descriptor < 0 && errno == EEXIST)
+            continue;
+        if (transaction->temp_descriptor < 0)
             return -1;
-        }
         if (record_temporary_identity(transaction) == 0)
             return 0;
 
@@ -862,9 +1044,7 @@ static int path_matches_temporary_file(const SaveTransaction *transaction,
         || fstatat(transaction->path.directory, name, &status,
                    AT_SYMLINK_NOFOLLOW) != 0)
         return 0;
-    return S_ISREG(status.st_mode)
-        && status.st_dev == transaction->temp_stat.st_dev
-        && status.st_ino == transaction->temp_stat.st_ino;
+    return stat_identity_matches(&status, &transaction->temp_stat);
 }
 
 static void transaction_init(SaveTransaction *transaction)
@@ -879,6 +1059,7 @@ static int transaction_close_stream(SaveTransaction *transaction)
 {
     FILE *stream = transaction->stream;
 
+    assert(stream != NULL);
     transaction->stream = NULL;
     return fclose(stream);
 }
@@ -1008,6 +1189,12 @@ static void transaction_cleanup(SaveTransaction *transaction)
     save_path_free(&transaction->path);
 }
 
+/*
+ * Deviation: the forward goto below reaches one cleanup label owning
+ * the transaction's many interdependent resources.  Chapter 13 quotes
+ * this body verbatim, so the justification lives here, not at the
+ * label.
+ */
 ModelSaveResult model_save_durable(const Model *m, const Tokenizer *tk,
                                    const char *path)
 {
@@ -1140,9 +1327,11 @@ static int load_header_and_tokenizer(
 
 static int load_checkpoint_parameters(LoadCandidate *candidate)
 {
-    for (int i = 0; i < candidate->model->param_count; i++) {
-        if (param_read(candidate->model->params[i],
-                       candidate->stream) != 0)
+    Model *model = candidate->model;
+
+    assert(model != NULL);
+    for (int i = 0; i < model->param_count; i++) {
+        if (param_read(model->params[i], candidate->stream) != 0)
             return -1;
     }
     return 0;
@@ -1168,12 +1357,19 @@ static Model *publish_load_candidate(LoadCandidate *candidate,
 {
     Model *model = candidate->model;
 
+    assert(model != NULL && candidate->tokenizer != NULL);
     *tokenizer = candidate->tokenizer;
     candidate->model = NULL;
     candidate->tokenizer = NULL;
     return model;
 }
 
+/*
+ * Deviation: the forward goto below reaches one cleanup label owning
+ * the candidate's snapshot, stream, tokenizer, and model.  Chapter 13
+ * quotes this body verbatim, so the justification lives here, not at
+ * the label.
+ */
 Model *model_load(Tokenizer **tk, const char *path)
 {
     if (tk == NULL)
