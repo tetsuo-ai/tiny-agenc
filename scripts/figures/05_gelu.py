@@ -66,8 +66,8 @@ def text(x, y, value, css_class, anchor="middle"):
     )
 
 
-def main():
-    svg = [
+def start_svg():
+    return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
@@ -116,6 +116,8 @@ def main():
         text(LEFT, TOP - 15, "output GELU(x)", "axis-label", "start"),
     ]
 
+
+def draw_grid(svg):
     for value in (-0.5, 0.0, 1.0, 2.0, 3.0, 4.0):
         y = plot_y(value)
         css_class = "axis" if value == 0.0 else "grid"
@@ -129,6 +131,8 @@ def main():
         svg.append(line(x, TOP, x, HEIGHT - BOTTOM, css_class))
         svg.append(text(x, HEIGHT - BOTTOM + 23, str(value), "tick"))
 
+
+def draw_curve(svg):
     samples = 400
     path_parts = []
     for index in range(samples + 1):
@@ -142,6 +146,8 @@ def main():
         'stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>'
     )
 
+
+def draw_lab_points(svg):
     lab_points = [
         (-1.0, -32.0, 34.0, "middle"),
         (0.0, 14.0, -14.0, "start"),
@@ -166,6 +172,8 @@ def main():
             )
         )
 
+
+def write_svg(svg):
     svg.extend(
         [
             text(WIDTH - RIGHT, HEIGHT - 20, "input x", "axis-label", "end"),
@@ -176,6 +184,15 @@ def main():
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as output_file:
         output_file.write("\n".join(svg) + "\n")
+
+
+def main():
+    svg = start_svg()
+
+    draw_grid(svg)
+    draw_curve(svg)
+    draw_lab_points(svg)
+    write_svg(svg)
 
 
 if __name__ == "__main__":

@@ -6,13 +6,83 @@
 #include "model_internal.h"
 
 static const float GRADIENT_CLIP_NORM = 1.0f;
+static const uint32_t FLOAT_EXPONENT_MASK = 0x7F800000u;
+
+enum {
+    NORM_PARAMETER_VECTORS_PER_BLOCK = 4,
+    FINAL_NORM_PARAMETER_VECTORS     = 2,
+    ATTENTION_OUTPUT_PARAMETER_WIDTHS = 1,
+    MLP_PARAMETER_MATRICES            = 2,
+    ATTENTION_PARAMETER_WIDTHS =
+        QKV_STREAMS + ATTENTION_OUTPUT_PARAMETER_WIDTHS,
+    MLP_PARAMETER_WIDTHS =
+        MLP_PARAMETER_MATRICES * MODEL_MLP_WIDENING,
+    MATRIX_WIDTHS_PER_BLOCK =
+        ATTENTION_PARAMETER_WIDTHS + MLP_PARAMETER_WIDTHS,
+    /* normed1, attended, projected, after_attention, normed2, down,
+     * and after_mlp each occupy one model-width tensor. */
+    BLOCK_MODEL_WIDTH_TENSORS = 7,
+    BLOCK_WIDE_TENSORS        = 2,
+    BLOCK_CHANNEL_WIDTHS =
+        BLOCK_MODEL_WIDTH_TENSORS + QKV_STREAMS
+        + BLOCK_WIDE_TENSORS * MODEL_MLP_WIDENING,
+    BLOCK_STATISTIC_BUFFERS        = 4,
+    MODEL_STREAM_BUFFERS           = 2,
+    MODEL_STATISTIC_BUFFERS        = 2,
+    MODEL_LOGIT_VALUE_BUFFERS      = 2,
+    MODEL_LOGIT_GRADIENT_BUFFERS   = 1,
+    PARAMETER_STORAGE_BUFFERS      = 4,
+    TOKEN_CACHE_BUFFERS            = 2,
+};
+
+typedef struct {
+    size_t rows;
+    size_t channels;
+    size_t scores;
+    size_t logits;
+} ShapeCounts;
+
+typedef struct {
+    size_t values;
+    size_t gradients;
+} BlockFloatCounts;
+
+typedef struct {
+    size_t parameters;
+    size_t values;
+    size_t gradients;
+} ModelFloatCounts;
+
+static int finite_float(float value);
+static int checked_add(size_t left, size_t right, size_t *result);
+static int checked_multiply(size_t left, size_t right, size_t *result);
+static int checked_scaled_add(size_t *total, size_t count, size_t scale);
+static int model_dimensions_in_range(ModelConfig cfg);
+static int model_pass_geometry_valid(ModelConfig cfg);
+static int embedding_parameter_floats(ModelConfig cfg, size_t *result);
+static int vector_parameter_floats(ModelConfig cfg, size_t *result);
+static int matrix_parameter_floats(ModelConfig cfg, size_t *result);
+static int measure_parameter_floats(ModelConfig cfg, size_t *result);
+static int measure_shape_counts(ModelConfig cfg, ShapeCounts *result);
+static int measure_block_float_counts(ShapeCounts shape,
+                                      BlockFloatCounts *result);
+static int measure_model_float_counts(ModelConfig cfg, ShapeCounts shape,
+                                      BlockFloatCounts block,
+                                      ModelFloatCounts *result);
+static int total_memory_bytes(ModelMemory *memory);
+static int build_memory_report(ShapeCounts shape, ModelFloatCounts floats,
+                               ModelMemory *result);
+static int measure_model_memory(ModelConfig cfg, ModelMemory *result);
+static double exact_gradient_norm_squared(const Model *m);
+static void scale_gradients_exactly(Model *m, double factor);
+static int clip_gradient_norm(Model *m);
 
 static int finite_float(float value)
 {
     uint32_t bits;
 
     memcpy(&bits, &value, sizeof bits);
-    return (bits & 0x7F800000u) != 0x7F800000u;
+    return (bits & FLOAT_EXPONENT_MASK) != FLOAT_EXPONENT_MASK;
 }
 
 static int checked_add(size_t left, size_t right, size_t *result)
@@ -38,24 +108,6 @@ static int checked_scaled_add(size_t *total, size_t count, size_t scale)
     return checked_multiply(count, scale, &term)
         && checked_add(*total, term, total);
 }
-
-typedef struct {
-    size_t rows;
-    size_t channels;
-    size_t scores;
-    size_t logits;
-} ShapeCounts;
-
-typedef struct {
-    size_t values;
-    size_t gradients;
-} BlockFloatCounts;
-
-typedef struct {
-    size_t parameters;
-    size_t values;
-    size_t gradients;
-} ModelFloatCounts;
 
 static int model_dimensions_in_range(ModelConfig cfg)
 {
@@ -95,9 +147,11 @@ static int vector_parameter_floats(ModelConfig cfg, size_t *result)
     size_t width      = (size_t)cfg.d_model;
     size_t block_vectors;
 
-    return checked_multiply((size_t)cfg.layer_count, 4 * width,
+    return checked_multiply((size_t)cfg.layer_count,
+                            NORM_PARAMETER_VECTORS_PER_BLOCK * width,
                             &block_vectors)
-        && checked_add(block_vectors, 2 * width, result);
+        && checked_add(block_vectors,
+                       FINAL_NORM_PARAMETER_VECTORS * width, result);
 }
 
 static int matrix_parameter_floats(ModelConfig cfg, size_t *result)
@@ -106,7 +160,7 @@ static int matrix_parameter_floats(ModelConfig cfg, size_t *result)
 
     return checked_multiply((size_t)cfg.d_model, (size_t)cfg.d_model,
                             &square)
-        && checked_multiply(square, 12, &square)
+        && checked_multiply(square, MATRIX_WIDTHS_PER_BLOCK, &square)
         && checked_multiply(square, (size_t)cfg.layer_count, result);
 }
 
@@ -159,10 +213,13 @@ static int measure_block_float_counts(ShapeCounts shape,
 {
     BlockFloatCounts counts = {0};
 
-    if (!checked_scaled_add(&counts.values, shape.channels, 18)
+    if (!checked_scaled_add(&counts.values, shape.channels,
+                            BLOCK_CHANNEL_WIDTHS)
         || !checked_add(counts.values, shape.scores, &counts.values)
-        || !checked_scaled_add(&counts.values, shape.rows, 4)
-        || !checked_scaled_add(&counts.gradients, shape.channels, 18)
+        || !checked_scaled_add(&counts.values, shape.rows,
+                               BLOCK_STATISTIC_BUFFERS)
+        || !checked_scaled_add(&counts.gradients, shape.channels,
+                               BLOCK_CHANNEL_WIDTHS)
         || !checked_add(counts.gradients, shape.scores,
                         &counts.gradients))
         return 0;
@@ -177,16 +234,20 @@ static int measure_model_float_counts(ModelConfig cfg, ShapeCounts shape,
     ModelFloatCounts counts = {0};
 
     if (!measure_parameter_floats(cfg, &counts.parameters)
-        || !checked_scaled_add(&counts.values, shape.channels, 2)
+        || !checked_scaled_add(&counts.values, shape.channels,
+                               MODEL_STREAM_BUFFERS)
         || !checked_scaled_add(&counts.values, block.values,
                                (size_t)cfg.layer_count)
-        || !checked_scaled_add(&counts.values, shape.rows, 2)
-        || !checked_scaled_add(&counts.values, shape.logits, 2)
-        || !checked_scaled_add(&counts.gradients, shape.channels, 2)
+        || !checked_scaled_add(&counts.values, shape.rows,
+                               MODEL_STATISTIC_BUFFERS)
+        || !checked_scaled_add(&counts.values, shape.logits,
+                               MODEL_LOGIT_VALUE_BUFFERS)
+        || !checked_scaled_add(&counts.gradients, shape.channels,
+                               MODEL_STREAM_BUFFERS)
         || !checked_scaled_add(&counts.gradients, block.gradients,
                                (size_t)cfg.layer_count)
-        || !checked_add(counts.gradients, shape.logits,
-                        &counts.gradients))
+        || !checked_scaled_add(&counts.gradients, shape.logits,
+                               MODEL_LOGIT_GRADIENT_BUFFERS))
         return 0;
     *result = counts;
     return 1;
@@ -207,13 +268,15 @@ static int build_memory_report(ShapeCounts shape, ModelFloatCounts floats,
 {
     ModelMemory memory;
 
-    if (!checked_multiply(floats.parameters, 4 * sizeof(float),
+    if (!checked_multiply(floats.parameters,
+                          PARAMETER_STORAGE_BUFFERS * sizeof(float),
                           &memory.parameter_bytes)
         || !checked_multiply(floats.values, sizeof(float),
                              &memory.activation_bytes)
         || !checked_multiply(floats.gradients, sizeof(float),
                              &memory.gradient_bytes)
-        || !checked_multiply(shape.rows, 2 * sizeof(int),
+        || !checked_multiply(shape.rows,
+                             TOKEN_CACHE_BUFFERS * sizeof(int),
                              &memory.token_bytes)
         || !total_memory_bytes(&memory))
         return 0;
@@ -251,7 +314,10 @@ ModelConfig model_config(const Model *m)
 
 ModelParams model_params(const Model *m)
 {
-    ModelParams view = { m->params, m->param_count };
+    ModelParams view = {
+        .params = m->params,
+        .count = m->param_count,
+    };
 
     return view;
 }

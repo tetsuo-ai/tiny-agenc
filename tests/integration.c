@@ -31,6 +31,186 @@
 
 static int checks;
 static int failures;
+static const uint32_t FLOAT_EXPONENT_MASK = 0x7F800000u;
+static const uint32_t CRC32_POLYNOMIAL = 0xEDB88320u;
+static const uint32_t CRC32_INITIAL = 0xFFFFFFFFu;
+static const uint32_t CHECKPOINT_MAGIC = 0x43474154u;
+static const uint32_t LEGACY_CHECKPOINT_MAGIC = 0x4B524754u;
+static const uint32_t QUIET_NAN_BITS = 0x7FC00000u;
+enum {
+    CRC32_BITS_PER_BYTE = 8,
+    CRC32_BUFFER_BYTES = 4096,
+    OVERSIZED_VOCABULARY_SIZE = UCHAR_MAX + 2,
+    CHECKPOINT_CURRENT_VERSION = 1,
+    CHECKPOINT_VERSION_FIELD_INDEX = 1,
+    CHECKPOINT_VOCABULARY_SIZE_FIELD_INDEX = 2,
+    CHECKPOINT_HEADER_FIELD_COUNT = 9,
+    UNSUPPORTED_CHECKPOINT_VERSION = 2,
+    SMOKE_TOKENS = 8,
+    SMOKE_TRAIN_STEPS = 60,
+    SMOKE_SAMPLE_TOKENS = 32,
+    SMOKE_PROMPT_TOKENS = 2,
+    FIRST_TRAINING_STEP = 1,
+    TEMPORARY_PATH_CAPACITY = 64,
+    CHECKPOINT_PATH_COUNT = 11,
+    MINIMUM_MODEL_EXTENT = 1,
+    RESOURCE_BOMB_EXTENT = 1024,
+    LAST_FILE_BYTE_OFFSET = -1,
+    FIRST_PARAMETER = 0,
+    FIRST_PARAMETER_VALUE = 0,
+    KNOWN_PCG_SEED = 42,
+    MINIMUM_DATASET_SEED = 19,
+    RNG_BOUND = 10,
+    GAUSSIAN_REPLAY_SEED = 991,
+    GAUSSIAN_REPLAY_COUNT = 16,
+    GAUSSIAN_KNOWN_ANSWER_SEED = 1337,
+    ALTERNATE_RNG_SEED = 1338,
+    NEXT_TOKEN_OFFSET = 1,
+    BYTES_PER_MEBIBYTE = 1024 * 1024,
+    MAX_EXPECTED_CORPUS_MEBIBYTES = 256,
+    SERIAL_THREAD_COUNT = 1,
+    PARALLEL_THREAD_COUNT = 4,
+};
+
+static const unsigned long long SMOKE_MODEL_SEED = 2024;
+static const unsigned long long SMOKE_SAMPLE_SEED = 777;
+static const float SMOKE_TEMPERATURE = 0.8f;
+static const float SMOKE_LOSS_REMAINING_FRACTION = 0.5f;
+static const float SMOKE_LEARNING_RATE = 0.02f;
+static const float SMOKE_BETA1 = 0.9f;
+static const float SMOKE_BETA2 = 0.999f;
+static const float SMOKE_EPSILON = 1e-8f;
+static const float SMOKE_WEIGHT_DECAY = 0.01f;
+static const char SMOKE_TRAINING_TEXT[] = "\nabcabcabcabcabcabcabcabc\n";
+static const char SMOKE_INPUT_TEXT[] = "\nabc\nabc";
+static const char SMOKE_TARGET_TEXT[] = "abc\nabc\n";
+static const char SMOKE_PROMPT_TEXT[] = "\na";
+
+typedef struct {
+    Tokenizer  *tokenizer;
+    ModelConfig config;
+    Model      *model;
+    int         inputs[SMOKE_TOKENS];
+    int         targets[SMOKE_TOKENS];
+    float       initial_loss;
+    float       trained_loss;
+} SmokeFixture;
+
+typedef struct {
+    char checkpoint[TEMPORARY_PATH_CAPACITY];
+    char bad_magic[TEMPORARY_PATH_CAPACITY];
+    char bad_version[TEMPORARY_PATH_CAPACITY];
+    char bad_config[TEMPORARY_PATH_CAPACITY];
+    char bad_tokens[TEMPORARY_PATH_CAPACITY];
+    char corrupt[TEMPORARY_PATH_CAPACITY];
+    char nonfinite[TEMPORARY_PATH_CAPACITY];
+    char truncated[TEMPORARY_PATH_CAPACITY];
+    char trailing[TEMPORARY_PATH_CAPACITY];
+    char resource[TEMPORARY_PATH_CAPACITY];
+    char too_large[TEMPORARY_PATH_CAPACITY];
+} CheckpointPaths;
+
+static void expect(int condition, const char *label);
+static uint32_t float_bits(float value);
+static float float_from_bits(uint32_t bits);
+static int finite_float(float value);
+static int write_slurp_fixture(char *path, const unsigned char *bytes,
+                               size_t count);
+static void check_nonempty_file_slurp(
+    const char *path, const unsigned char *bytes, size_t count);
+static void check_empty_file_slurp(const char *path);
+static void check_missing_file_slurp(void);
+static void check_file_slurp(void);
+static int configs_equal(ModelConfig a, ModelConfig b);
+static void check_pcg_known_answers(void);
+static void check_gaussian_replay(void);
+static void check_gaussian_known_answers(void);
+static void check_distinct_rng_seeds(void);
+static void check_rng(void);
+static Tokenizer *read_vocabulary_fixture(int32_t count,
+                                          const unsigned char *bytes,
+                                          size_t stored);
+static void check_tokenizer_mapping(const Tokenizer *tokenizer);
+static void check_tokenizer_serialization(const Tokenizer *tokenizer);
+static void check_saved_tokenizer_rejections(void);
+static void check_tokenizer(void);
+static void check_minimum_dataset(void);
+static void check_sampled_dataset_windows(void);
+static void check_filtered_dataset_limits(void);
+static void check_dataset(void);
+static void check_mat(void);
+static int close_float(float actual, float expected, float tolerance);
+static void check_matmul_forward_example(void);
+static void check_softmax_forward_example(void);
+static void check_residual_forward_example(void);
+static void check_attention_causality(void);
+static void check_embedding_positions(void);
+static void check_forward(void);
+static void choose_test_threads(int count);
+static void check_parallel_matmul(void);
+static void check_parallel_attention(void);
+static void check_parallel_contracts(void);
+static ModelConfig tiny_config(void);
+static ModelConfig maximum_config(void);
+static size_t architecture_parameter_count(ModelConfig cfg);
+static int memory_reports_equal(ModelMemory first, ModelMemory second);
+static void check_model_lower_limits(ModelConfig cfg);
+static void check_model_upper_limits(void);
+static void check_model_config_contract(ModelConfig cfg);
+static ModelConfig showcase_config(void);
+static void check_showcase_memory(ModelConfig showcase);
+static void check_memory_failure_contract(ModelConfig showcase);
+static void check_resource_bomb_memory(void);
+static void check_model_memory_contract(void);
+static void check_constructed_model_contract(ModelConfig cfg);
+static void check_model_contract(void);
+static AdamW clipping_test_optimizer(void);
+static void clear_model_values_and_gradients(Model *model);
+static double model_gradient_norm(const Model *model);
+static void check_finite_gradient_clipping(void);
+static void check_overflow_safe_gradient_clipping(void);
+static void check_nonfinite_gradient_rejections(void);
+static void check_invalid_optimizer_rejection(void);
+static void check_optimizer_integration(void);
+static int models_equal(const Model *first, const Model *second);
+static int temporary_path(char *path);
+static void expect_load_failure(const char *path, Tokenizer *sentinel,
+                                const char *label);
+static int overwrite_file_bytes(const char *path, long offset,
+                                const void *bytes, size_t count);
+static uint32_t fixture_crc32(uint32_t crc, const unsigned char *bytes,
+                              size_t count);
+static int rewrite_checkpoint_checksum(const char *path);
+static int write_resource_checkpoint(const char *path, ModelConfig cfg);
+static AdamW smoke_optimizer(void);
+static void smoke_fixture_init(SmokeFixture *fixture);
+static void train_smoke_fixture(SmokeFixture *fixture);
+static void smoke_fixture_free(SmokeFixture *fixture);
+static CheckpointPaths checkpoint_paths(void);
+static int reserve_checkpoint_paths(CheckpointPaths *paths);
+static void remove_checkpoint_paths(const CheckpointPaths *paths);
+static void check_sampling_replay(const SmokeFixture *fixture,
+                                  Model *loaded,
+                                  const Tokenizer *loaded_tokenizer);
+static void check_checkpoint_round_trip(const SmokeFixture *fixture,
+                                        const char *path);
+static void check_header_rejections(const SmokeFixture *fixture,
+                                    const CheckpointPaths *paths);
+static void check_resource_rejections(const SmokeFixture *fixture,
+                                      const CheckpointPaths *paths);
+static long checkpoint_vocabulary_offset(void);
+static long checkpoint_parameter_offset(const Tokenizer *tokenizer);
+static void check_tokenizer_rejection(const SmokeFixture *fixture,
+                                      const char *path);
+static void check_parameter_payload_rejections(
+    const SmokeFixture *fixture, const CheckpointPaths *paths);
+static void check_length_rejections(const SmokeFixture *fixture,
+                                    const CheckpointPaths *paths);
+static void check_failed_save_preserves_checkpoint(
+    SmokeFixture *fixture, const char *path);
+static void check_training_checkpoint_and_sampling(void);
+static void usage(const char *program);
+int main(int argc, char **argv);
 
 static void expect(int condition, const char *label)
 {
@@ -59,70 +239,97 @@ static float float_from_bits(uint32_t bits)
 
 static int finite_float(float value)
 {
-    return (float_bits(value) & 0x7F800000u) != 0x7F800000u;
+    return (float_bits(value) & FLOAT_EXPONENT_MASK)
+        != FLOAT_EXPONENT_MASK;
 }
 
-static void check_file_slurp(void)
+static int write_slurp_fixture(char *path, const unsigned char *bytes,
+                               size_t count)
 {
-    char path[] = "/tmp/tiny-agenc-integration-slurp-XXXXXX";
     int descriptor = mkstemp(path);
 
     expect(descriptor >= 0, "bounded slurp fixture path is created");
     if (descriptor < 0)
-        return;
+        return -1;
 
     FILE *stream = fdopen(descriptor, "wb");
-    static const unsigned char BYTES[] = { 'A', 0, 'Z' };
 
     expect(stream != NULL, "bounded slurp fixture stream opens");
     if (stream == NULL) {
         close(descriptor);
         remove(path);
-        return;
+        return -1;
     }
     int wrote_fixture =
-        fwrite(BYTES, 1, sizeof BYTES, stream) == sizeof BYTES;
+        fwrite(bytes, 1, count, stream) == count;
     int closed_fixture = fclose(stream) == 0;
 
     expect(wrote_fixture && closed_fixture,
            "bounded slurp fixture is written");
+    return wrote_fixture && closed_fixture ? 0 : -1;
+}
 
-    char *text = (char *)1;
-    size_t size = 99;
+static void check_nonempty_file_slurp(
+    const char *path, const unsigned char *bytes, size_t count)
+{
+    char sentinel;
+    char *text = &sentinel;
+    size_t size = SIZE_MAX;
 
-    expect(file_slurp_bounded(path, sizeof BYTES, &text, &size)
+    expect(file_slurp_bounded(path, count, &text, &size)
                == FILE_SLURP_OK
-           && text != NULL && size == sizeof BYTES
-           && memcmp(text, BYTES, sizeof BYTES) == 0
+           && text != NULL && size == count
+           && memcmp(text, bytes, count) == 0
            && text[size] == '\0',
            "bounded slurp accepts an exact ceiling and appends a sentinel");
     free(text);
 
-    text = (char *)1;
-    size = 99;
-    expect(file_slurp_bounded(path, sizeof BYTES - 1, &text, &size)
+    text = &sentinel;
+    size = SIZE_MAX;
+    expect(file_slurp_bounded(path, count - 1, &text, &size)
                == FILE_SLURP_TOO_LARGE
            && text == NULL && size == 0,
            "bounded slurp rejects an oversized file without output");
+}
 
-    stream = fopen(path, "wb");
+static void check_empty_file_slurp(const char *path)
+{
+    char sentinel;
+    char *text = &sentinel;
+    size_t size = SIZE_MAX;
+    FILE *stream = fopen(path, "wb");
+
     int closed_empty = stream != NULL && fclose(stream) == 0;
 
-    expect(closed_empty,
-           "empty bounded slurp fixture is written");
-    text = (char *)1;
-    size = 99;
+    expect(closed_empty, "empty bounded slurp fixture is written");
     expect(file_slurp_bounded(path, 0, &text, &size) == FILE_SLURP_OK
            && text != NULL && size == 0 && text[0] == '\0',
            "bounded slurp accepts an empty exact-ceiling file");
     free(text);
+}
 
-    text = (char *)1;
-    size = 99;
+static void check_missing_file_slurp(void)
+{
+    char sentinel;
+    char *text = &sentinel;
+    size_t size = SIZE_MAX;
+
     expect(file_slurp_bounded(NULL, 0, &text, &size)
                == FILE_SLURP_IO_ERROR
            && text == NULL && size == 0,
            "bounded slurp rejects a missing path and clears outputs");
+}
+
+static void check_file_slurp(void)
+{
+    static const unsigned char BYTES[] = { 'A', 0, 'Z' };
+    char path[] = "/tmp/tiny-agenc-integration-slurp-XXXXXX";
+
+    if (write_slurp_fixture(path, BYTES, sizeof BYTES) != 0)
+        return;
+    check_nonempty_file_slurp(path, BYTES, sizeof BYTES);
+    check_empty_file_slurp(path);
+    check_missing_file_slurp();
     remove(path);
 }
 
@@ -138,7 +345,7 @@ static int configs_equal(ModelConfig a, ModelConfig b)
 
 /* -------- deterministic randomness -------- */
 
-static void check_rng(void)
+static void check_pcg_known_answers(void)
 {
     /*
      * These are the high 24 bits of the published PCG32 stream after
@@ -152,49 +359,68 @@ static void check_rng(void)
     };
     static const int BELOW_TEN[] = { 7, 4, 4, 2, 9, 4, 7, 8, 4, 9, 7, 4 };
 
-    Rng *uniform = rng_new(42);
+    Rng *uniform = rng_new(KNOWN_PCG_SEED);
 
     for (size_t i = 0; i < sizeof UNIFORM_BITS / sizeof UNIFORM_BITS[0]; i++)
         expect(float_bits(rng_uniform(uniform)) == UNIFORM_BITS[i],
                "PCG32 uniform known answer");
     rng_free(uniform);
 
-    Rng *bounded = rng_new(42);
+    Rng *bounded = rng_new(KNOWN_PCG_SEED);
 
     for (size_t i = 0; i < sizeof BELOW_TEN / sizeof BELOW_TEN[0]; i++)
-        expect(rng_below(bounded, 10) == BELOW_TEN[i],
+        expect(rng_below(bounded, RNG_BOUND) == BELOW_TEN[i],
                "PCG32 bounded known answer");
     rng_free(bounded);
+}
 
-    Rng *first  = rng_new(991);
-    Rng *second = rng_new(991);
+static void check_gaussian_replay(void)
+{
+    Rng *first = rng_new(GAUSSIAN_REPLAY_SEED);
+    Rng *second = rng_new(GAUSSIAN_REPLAY_SEED);
 
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < GAUSSIAN_REPLAY_COUNT; i++)
         expect(float_bits(rng_gaussian(first)) == float_bits(rng_gaussian(second)),
                "Box-Muller stream replays exactly");
     rng_free(first);
     rng_free(second);
+}
 
+static void check_gaussian_known_answers(void)
+{
     static const float GAUSSIAN_ANSWERS[] = {
         -0.782266140f, 1.062945604f, 0.196520776f, 0.952153027f,
         -0.718591213f, -1.716835856f, 0.370696634f, 0.374907821f,
     };
-    Rng *gaussian = rng_new(1337);
+    static const float TOLERANCE = 1e-6f;
+    Rng *gaussian = rng_new(GAUSSIAN_KNOWN_ANSWER_SEED);
 
     for (size_t i = 0;
          i < sizeof GAUSSIAN_ANSWERS / sizeof GAUSSIAN_ANSWERS[0];
          i++)
-        expect(fabsf(rng_gaussian(gaussian) - GAUSSIAN_ANSWERS[i]) <= 1e-6f,
+        expect(fabsf(rng_gaussian(gaussian) - GAUSSIAN_ANSWERS[i])
+                   <= TOLERANCE,
                "Box-Muller gaussian known answer");
     rng_free(gaussian);
+}
 
-    Rng *seed_1337 = rng_new(1337);
-    Rng *seed_1338 = rng_new(1338);
+static void check_distinct_rng_seeds(void)
+{
+    Rng *first = rng_new(GAUSSIAN_KNOWN_ANSWER_SEED);
+    Rng *second = rng_new(ALTERNATE_RNG_SEED);
 
-    expect(float_bits(rng_uniform(seed_1337)) != float_bits(rng_uniform(seed_1338)),
+    expect(float_bits(rng_uniform(first)) != float_bits(rng_uniform(second)),
            "different RNG seeds change the stream");
-    rng_free(seed_1337);
-    rng_free(seed_1338);
+    rng_free(first);
+    rng_free(second);
+}
+
+static void check_rng(void)
+{
+    check_pcg_known_answers();
+    check_gaussian_replay();
+    check_gaussian_known_answers();
+    check_distinct_rng_seeds();
 }
 
 /* -------- tokenizer and dataset -------- */
@@ -221,22 +447,23 @@ static Tokenizer *read_vocabulary_fixture(int32_t count,
     return tk;
 }
 
-static void check_tokenizer(void)
+static void check_tokenizer_mapping(const Tokenizer *tokenizer)
 {
-    static const char VOCABULARY_TEXT[] = "zaba\n";
     static const char TO_ENCODE[]       = "az?b\n";
     static const int  EXPECTED_IDS[]    = { 1, 3, 2, 0 };
     static const char EXPECTED_BYTES[]  = { '\n', 'a', 'b', 'z' };
 
-    Tokenizer *tk = tokenizer_new(VOCABULARY_TEXT, sizeof VOCABULARY_TEXT - 1);
-
-    expect(tokenizer_vocab_size(tk) == 4, "tokenizer deduplicates its vocabulary");
-    for (int id = 0; id < 4; id++)
-        expect(tokenizer_decode(tk, id) == EXPECTED_BYTES[id],
+    expect(tokenizer_vocab_size(tokenizer)
+               == (int)(sizeof EXPECTED_BYTES / sizeof EXPECTED_BYTES[0]),
+           "tokenizer deduplicates its vocabulary");
+    for (size_t id = 0;
+         id < sizeof EXPECTED_BYTES / sizeof EXPECTED_BYTES[0]; id++)
+        expect(tokenizer_decode(tokenizer, (int)id) == EXPECTED_BYTES[id],
                "tokenizer ids are byte-sorted");
 
     int    ids[sizeof TO_ENCODE - 1];
-    size_t encoded = tokenizer_encode(tk, ids, TO_ENCODE, sizeof TO_ENCODE - 1);
+    size_t encoded = tokenizer_encode(
+        tokenizer, ids, TO_ENCODE, sizeof TO_ENCODE - 1);
 
     expect(encoded == sizeof EXPECTED_IDS / sizeof EXPECTED_IDS[0],
            "tokenizer skips bytes outside the vocabulary");
@@ -247,32 +474,41 @@ static void check_tokenizer(void)
 
     if (encoded <= sizeof decoded)
         for (size_t i = 0; i < encoded; i++)
-            decoded[i] = tokenizer_decode(tk, ids[i]);
-    expect(encoded == 4 && memcmp(decoded, "azb\n", 4) == 0,
+            decoded[i] = tokenizer_decode(tokenizer, ids[i]);
+    expect(encoded == sizeof "azb\n" - 1
+               && memcmp(decoded, "azb\n", sizeof "azb\n" - 1) == 0,
            "tokenizer encode and decode round-trip known bytes");
+}
 
+static void check_tokenizer_serialization(const Tokenizer *tokenizer)
+{
     FILE *serialized = tmpfile();
 
     expect(serialized != NULL, "tokenizer test opens a temporary stream");
-    if (serialized != NULL) {
-        expect(tokenizer_write(tk, serialized) == 0,
-               "tokenizer writes its vocabulary");
-        rewind(serialized);
+    if (serialized == NULL)
+        return;
 
-        Tokenizer *loaded = tokenizer_read(serialized);
+    expect(tokenizer_write(tokenizer, serialized) == 0,
+           "tokenizer writes its vocabulary");
+    rewind(serialized);
 
-        expect(loaded != NULL, "tokenizer reads its vocabulary");
-        if (loaded != NULL) {
-            expect(tokenizer_vocab_size(loaded) == tokenizer_vocab_size(tk),
-                   "tokenizer round-trip keeps vocabulary size");
-            for (int id = 0; id < tokenizer_vocab_size(tk); id++)
-                expect(tokenizer_decode(loaded, id) == tokenizer_decode(tk, id),
-                       "tokenizer round-trip keeps id order");
-            tokenizer_free(loaded);
-        }
-        fclose(serialized);
+    Tokenizer *loaded = tokenizer_read(serialized);
+
+    expect(loaded != NULL, "tokenizer reads its vocabulary");
+    if (loaded != NULL) {
+        expect(tokenizer_vocab_size(loaded) == tokenizer_vocab_size(tokenizer),
+               "tokenizer round-trip keeps vocabulary size");
+        for (int id = 0; id < tokenizer_vocab_size(tokenizer); id++)
+            expect(tokenizer_decode(loaded, id)
+                       == tokenizer_decode(tokenizer, id),
+                   "tokenizer round-trip keeps id order");
+        tokenizer_free(loaded);
     }
+    fclose(serialized);
+}
 
+static void check_saved_tokenizer_rejections(void)
+{
     static const unsigned char DESCENDING[] = { 'z', 'a' };
     static const unsigned char DUPLICATE[] = { 'a', 'a' };
     static const unsigned char SHORT_BODY[] = { 'a' };
@@ -280,62 +516,84 @@ static void check_tokenizer(void)
         0x00u, 0x7Fu, 0x80u, 0xFFu,
     };
 
-    expect(read_vocabulary_fixture(2, DESCENDING,
+    expect(read_vocabulary_fixture((int32_t)(sizeof DESCENDING), DESCENDING,
                                    sizeof DESCENDING) == NULL,
            "tokenizer rejects descending saved bytes");
-    expect(read_vocabulary_fixture(2, DUPLICATE,
+    expect(read_vocabulary_fixture((int32_t)(sizeof DUPLICATE), DUPLICATE,
                                    sizeof DUPLICATE) == NULL,
            "tokenizer rejects duplicate saved bytes");
-    expect(read_vocabulary_fixture(2, SHORT_BODY,
+    expect(read_vocabulary_fixture((int32_t)(sizeof DESCENDING), SHORT_BODY,
                                    sizeof SHORT_BODY) == NULL,
            "tokenizer rejects a short saved vocabulary");
     expect(read_vocabulary_fixture(0, HIGH_BYTES, 0) == NULL,
            "tokenizer rejects a zero saved vocabulary count");
-    expect(read_vocabulary_fixture(257, HIGH_BYTES, 0) == NULL,
+    expect(read_vocabulary_fixture(OVERSIZED_VOCABULARY_SIZE,
+                                   HIGH_BYTES, 0) == NULL,
            "tokenizer rejects an oversized saved vocabulary count");
 
-    Tokenizer *high = read_vocabulary_fixture(4, HIGH_BYTES,
-                                              sizeof HIGH_BYTES);
+    Tokenizer *high = read_vocabulary_fixture(
+        (int32_t)(sizeof HIGH_BYTES), HIGH_BYTES, sizeof HIGH_BYTES);
 
-    expect(high != NULL && tokenizer_vocab_size(high) == 4,
+    expect(high != NULL
+               && tokenizer_vocab_size(high) == (int)sizeof HIGH_BYTES,
            "tokenizer accepts canonical unsigned high bytes");
     if (high != NULL) {
-        for (int id = 0; id < 4; id++)
-            expect((unsigned char)tokenizer_decode(high, id)
+        for (size_t id = 0; id < sizeof HIGH_BYTES; id++)
+            expect((unsigned char)tokenizer_decode(high, (int)id)
                        == HIGH_BYTES[id],
                    "tokenizer preserves unsigned high-byte ids");
         tokenizer_free(high);
     }
-    tokenizer_free(tk);
 }
 
-static void check_dataset(void)
+static void check_tokenizer(void)
+{
+    static const char VOCABULARY_TEXT[] = "zaba\n";
+    Tokenizer *tokenizer = tokenizer_new(
+        VOCABULARY_TEXT, sizeof VOCABULARY_TEXT - 1);
+
+    check_tokenizer_mapping(tokenizer);
+    check_tokenizer_serialization(tokenizer);
+    check_saved_tokenizer_rejections();
+    tokenizer_free(tokenizer);
+}
+
+static void check_minimum_dataset(void)
 {
     static const char MINIMUM[] = "abcd";
+    enum { BLOCK_SIZE = 3 };
 
     Tokenizer *minimum_tk = tokenizer_new(MINIMUM, sizeof MINIMUM - 1);
     Dataset   *minimum_ds = dataset_new(minimum_tk, MINIMUM, sizeof MINIMUM - 1);
-    Rng       *minimum_rng = rng_new(19);
-    int        inputs[3];
-    int        targets[3];
+    Rng       *minimum_rng = rng_new(MINIMUM_DATASET_SEED);
+    int        inputs[BLOCK_SIZE];
+    int        targets[BLOCK_SIZE];
 
     expect(dataset_token_count(minimum_ds) == sizeof MINIMUM - 1,
            "dataset reports encoded token count");
-    dataset_batch(minimum_ds, minimum_rng, inputs, targets, 1, 3);
-    for (int i = 0; i < 3; i++) {
+    dataset_batch(minimum_ds, minimum_rng, inputs, targets, 1, BLOCK_SIZE);
+    for (int i = 0; i < BLOCK_SIZE; i++) {
         expect(inputs[i] == i, "minimum dataset uses its only legal window");
-        expect(targets[i] == i + 1, "minimum dataset targets are shifted once");
+        expect(targets[i] == i + NEXT_TOKEN_OFFSET,
+               "minimum dataset targets are shifted once");
     }
     rng_free(minimum_rng);
     dataset_free(minimum_ds);
     tokenizer_free(minimum_tk);
+}
 
+static void check_sampled_dataset_windows(void)
+{
     static const char DIGITS[] = "0123456789";
-    enum { ROWS = 256, BLOCK = 3 };
+    enum {
+        ROWS = 256,
+        BLOCK = 3,
+        LAST_START = sizeof DIGITS - 1 - BLOCK - NEXT_TOKEN_OFFSET,
+    };
 
     Tokenizer *digits_tk = tokenizer_new(DIGITS, sizeof DIGITS - 1);
     Dataset   *digits_ds = dataset_new(digits_tk, DIGITS, sizeof DIGITS - 1);
-    Rng       *digits_rng = rng_new(42);
+    Rng       *digits_rng = rng_new(KNOWN_PCG_SEED);
     int        many_inputs[ROWS * BLOCK];
     int        many_targets[ROWS * BLOCK];
     int        saw_first = 0;
@@ -345,13 +603,15 @@ static void check_dataset(void)
     for (int row = 0; row < ROWS; row++) {
         int start = many_inputs[row * BLOCK];
 
-        expect(start >= 0 && start <= 6, "dataset start stays inside legal bounds");
+        expect(start >= 0 && start <= LAST_START,
+               "dataset start stays inside legal bounds");
         saw_first |= start == 0;
-        saw_last  |= start == 6;
+        saw_last  |= start == LAST_START;
         for (int t = 0; t < BLOCK; t++) {
             expect(many_inputs[row * BLOCK + t] == start + t,
                    "dataset input window is consecutive");
-            expect(many_targets[row * BLOCK + t] == start + t + 1,
+            expect(many_targets[row * BLOCK + t]
+                       == start + t + NEXT_TOKEN_OFFSET,
                    "dataset target window is shifted once");
         }
     }
@@ -361,17 +621,25 @@ static void check_dataset(void)
     rng_free(digits_rng);
     dataset_free(digits_ds);
     tokenizer_free(digits_tk);
+}
 
-    Tokenizer *filtered_tk = tokenizer_new("ab", 2);
-    Dataset   *filtered_ds = dataset_new(filtered_tk, "a?b", 3);
+static void check_filtered_dataset_limits(void)
+{
+    static const char VOCABULARY[] = "ab";
+    static const char FILTERED_TEXT[] = "a?b";
+    Tokenizer *filtered_tk = tokenizer_new(
+        VOCABULARY, sizeof VOCABULARY - 1);
+    Dataset *filtered_ds = dataset_new(
+        filtered_tk, FILTERED_TEXT, sizeof FILTERED_TEXT - 1);
 
-    expect(dataset_token_count(filtered_ds) == 2,
+    expect(dataset_token_count(filtered_ds) == sizeof VOCABULARY - 1,
            "dataset count reflects tokenizer filtering");
     dataset_free(filtered_ds);
 
     size_t corpus_limit = dataset_max_text_bytes();
 
-    expect(corpus_limit <= (size_t)256 * 1024 * 1024,
+    expect(corpus_limit
+               <= (size_t)MAX_EXPECTED_CORPUS_MEBIBYTES * BYTES_PER_MEBIBYTE,
            "dataset source policy is capped at 256 MiB");
     expect(corpus_limit <= SIZE_MAX / sizeof(int),
            "dataset source policy fits its token allocation");
@@ -380,6 +648,13 @@ static void check_dataset(void)
     expect(dataset_new(filtered_tk, "a", corpus_limit + 1) == NULL,
            "dataset rejects an oversized source before reading it");
     tokenizer_free(filtered_tk);
+}
+
+static void check_dataset(void)
+{
+    check_minimum_dataset();
+    check_sampled_dataset_windows();
+    check_filtered_dataset_limits();
 }
 
 /* -------- matrix views -------- */
@@ -423,8 +698,9 @@ static int close_float(float actual, float expected, float tolerance)
     return fabsf(actual - expected) <= tolerance;
 }
 
-static void check_forward(void)
+static void check_matmul_forward_example(void)
 {
+    enum { ROWS = 2, INPUTS = 3, OUTPUTS = 2 };
     float x_values[] = {
          1.0f, 2.0f, 3.0f,
         -1.0f, 0.0f, 2.0f,
@@ -433,50 +709,62 @@ static void check_forward(void)
         1.0f, 0.0f, -1.0f,
         2.0f, 1.0f,  0.5f,
     };
-    float product_values[4] = { 0 };
-    Mat x       = mat_make(x_values, 2, 3);
-    Mat weights = mat_make(weight_values, 2, 3);
-    Mat product = mat_make(product_values, 2, 2);
+    float product_values[ROWS * OUTPUTS] = { 0 };
+    Mat x       = mat_make(x_values, ROWS, INPUTS);
+    Mat weights = mat_make(weight_values, OUTPUTS, INPUTS);
+    Mat product = mat_make(product_values, ROWS, OUTPUTS);
 
     matmul_forward(product, x, weights);
     expect(product_values[0] == -2.0f, "known matmul row 0 column 0");
     expect(product_values[1] ==  5.5f, "known matmul row 0 column 1");
     expect(product_values[2] == -3.0f, "known matmul row 1 column 0");
     expect(product_values[3] == -1.0f, "known matmul row 1 column 1");
+}
 
+static void check_softmax_forward_example(void)
+{
     float softmax[] = { 1000.0f, 1000.0f, 999.0f };
+    int softmax_count = (int)(sizeof softmax / sizeof softmax[0]);
 
-    softmax_in_place(softmax, 3);
+    softmax_in_place(softmax, softmax_count);
     expect(close_float(softmax[0] + softmax[1] + softmax[2], 1.0f, 1e-6f),
            "stable softmax sums to one");
     expect(close_float(softmax[0], softmax[1], 1e-7f),
            "equal logits receive equal probability");
     expect(softmax[0] > softmax[2], "larger logit receives larger probability");
 
-    float logits_values[8] = { 0 };
-    float probs_values[8]  = { 0 };
+    enum { ROWS = 2, CLASSES = 4 };
+    float logits_values[ROWS * CLASSES] = { 0 };
+    float probs_values[ROWS * CLASSES]  = { 0 };
     int   class_targets[]   = { 0, 3 };
-    Mat   logits = mat_make(logits_values, 2, 4);
-    Mat   probs  = mat_make(probs_values, 2, 4);
+    Mat   logits = mat_make(logits_values, ROWS, CLASSES);
+    Mat   probs  = mat_make(probs_values, ROWS, CLASSES);
     float uniform_loss = crossentropy_forward(probs, logits, class_targets);
 
-    expect(close_float(uniform_loss, logf(4.0f), 1e-6f),
+    expect(close_float(uniform_loss, logf((float)CLASSES), 1e-6f),
            "uniform logits produce log vocabulary loss");
-    for (int i = 0; i < 8; i++)
-        expect(probs_values[i] == 0.25f,
+    for (int i = 0; i < ROWS * CLASSES; i++)
+        expect(probs_values[i] == 1.0f / (float)CLASSES,
                "uniform logits produce uniform probabilities");
+}
 
+static void check_residual_forward_example(void)
+{
     float left_values[]  = { 1.0f, -2.0f, 4.5f };
     float right_values[] = { 3.0f,  5.0f, 0.5f };
-    float sum_values[3]  = { 0 };
+    float sum_values[sizeof left_values / sizeof left_values[0]] = { 0 };
+    int count = (int)(sizeof left_values / sizeof left_values[0]);
 
-    residual_forward(mat_make(sum_values, 1, 3),
-                     mat_make(left_values, 1, 3),
-                     mat_make(right_values, 1, 3));
+    residual_forward(mat_make(sum_values, 1, count),
+                     mat_make(left_values, 1, count),
+                     mat_make(right_values, 1, count));
     expect(sum_values[0] == 4.0f, "residual adds first element");
     expect(sum_values[1] == 3.0f, "residual adds second element");
     expect(sum_values[2] == 5.0f, "residual adds third element");
+}
 
+static void check_attention_causality(void)
+{
     enum { TIME = 3, CHANNELS = 2, QKV_COLS = QKV_STREAMS * CHANNELS };
     float qkv_values[TIME * QKV_COLS] = {
         1.0f, 0.0f,  1.0f, 0.0f,  2.0f, 1.0f,
@@ -491,25 +779,30 @@ static void check_forward(void)
 
     attention_forward(attended, scores, qkv, TIME, 1);
 
-    float earlier[2 * CHANNELS];
+    float earlier[(TIME - 1) * CHANNELS];
 
     memcpy(earlier, attended_values, sizeof earlier);
     for (int c = 0; c < QKV_COLS; c++)
-        mat_row(qkv, 2)[c] = 1000.0f + (float)c;
+        mat_row(qkv, TIME - 1)[c] = 1000.0f + (float)c;
     attention_forward(attended, scores, qkv, TIME, 1);
     expect(memcmp(earlier, attended_values, sizeof earlier) == 0,
            "future QKV cannot change earlier attention outputs");
+}
 
+static void check_embedding_positions(void)
+{
+    enum { TIME = 3, CHANNELS = 2, SEQUENCES = 2 };
     float token_values[2] = { 0 };
     float position_values[] = {
         1.0f, 2.0f,
         3.0f, 4.0f,
         5.0f, 6.0f,
     };
-    float embedded_values[2 * TIME * CHANNELS] = { 0 };
-    int   tokens[2 * TIME] = { 0 };
+    float embedded_values[SEQUENCES * TIME * CHANNELS] = { 0 };
+    int   tokens[SEQUENCES * TIME] = { 0 };
 
-    embedding_forward(mat_make(embedded_values, 2 * TIME, CHANNELS),
+    embedding_forward(mat_make(embedded_values,
+                               SEQUENCES * TIME, CHANNELS),
                       tokens, mat_make(token_values, 1, CHANNELS),
                       mat_make(position_values, TIME, CHANNELS), TIME);
     expect(memcmp(embedded_values, position_values, sizeof position_values) == 0,
@@ -517,6 +810,15 @@ static void check_forward(void)
     expect(memcmp(embedded_values + TIME * CHANNELS,
                   position_values, sizeof position_values) == 0,
            "position indices restart for the next sequence");
+}
+
+static void check_forward(void)
+{
+    check_matmul_forward_example();
+    check_softmax_forward_example();
+    check_residual_forward_example();
+    check_attention_causality();
+    check_embedding_positions();
 }
 
 static void choose_test_threads(int count)
@@ -529,18 +831,12 @@ static void choose_test_threads(int count)
 #endif
 }
 
-static void check_parallel_contracts(void)
+static void check_parallel_matmul(void)
 {
     enum {
         ROWS = 64,
         INPUTS = 7,
         OUTPUTS = 64,
-        SEQUENCES = 32,
-        TIME = 3,
-        CHANNELS = 4,
-        HEADS = 2,
-        ATTENTION_ROWS = SEQUENCES * TIME,
-        SCORE_ROWS = SEQUENCES * HEADS * TIME,
     };
     float x[ROWS * INPUTS];
     float weights[OUTPUTS * INPUTS];
@@ -559,7 +855,7 @@ static void check_parallel_contracts(void)
     for (size_t i = 0; i < sizeof d_out / sizeof d_out[0]; i++)
         d_out[i] = (float)((int)(i % 19) - 9) / 7.0f;
 
-    choose_test_threads(1);
+    choose_test_threads(SERIAL_THREAD_COUNT);
     matmul_forward(mat_make(serial_out, ROWS, OUTPUTS),
                    mat_make(x, ROWS, INPUTS),
                    mat_make(weights, OUTPUTS, INPUTS));
@@ -569,7 +865,7 @@ static void check_parallel_contracts(void)
                     mat_make(x, ROWS, INPUTS),
                     mat_make(weights, OUTPUTS, INPUTS));
 
-    choose_test_threads(4);
+    choose_test_threads(PARALLEL_THREAD_COUNT);
     matmul_forward(mat_make(parallel_out, ROWS, OUTPUTS),
                    mat_make(x, ROWS, INPUTS),
                    mat_make(weights, OUTPUTS, INPUTS));
@@ -585,7 +881,18 @@ static void check_parallel_contracts(void)
            && memcmp(serial_d_weights, parallel_d_weights,
                      sizeof serial_d_weights) == 0,
            "threshold-crossing matmul backward is thread-count invariant");
+}
 
+static void check_parallel_attention(void)
+{
+    enum {
+        SEQUENCES = 32,
+        TIME = 3,
+        CHANNELS = 4,
+        HEADS = 2,
+        ATTENTION_ROWS = SEQUENCES * TIME,
+        SCORE_ROWS = SEQUENCES * HEADS * TIME,
+    };
     float qkv[ATTENTION_ROWS * QKV_STREAMS * CHANNELS];
     float attention_d_out[ATTENTION_ROWS * CHANNELS];
     float serial_attention[ATTENTION_ROWS * CHANNELS];
@@ -603,7 +910,7 @@ static void check_parallel_contracts(void)
          i < sizeof attention_d_out / sizeof attention_d_out[0]; i++)
         attention_d_out[i] = (float)((int)(i % 11) - 5) / 8.0f;
 
-    choose_test_threads(1);
+    choose_test_threads(SERIAL_THREAD_COUNT);
     attention_forward(mat_make(serial_attention, ATTENTION_ROWS, CHANNELS),
                       mat_make(serial_scores, SCORE_ROWS, TIME),
                       mat_make(qkv, ATTENTION_ROWS,
@@ -616,7 +923,7 @@ static void check_parallel_contracts(void)
         mat_make(qkv, ATTENTION_ROWS, QKV_STREAMS * CHANNELS),
         mat_make(serial_scores, SCORE_ROWS, TIME), TIME, HEADS);
 
-    choose_test_threads(4);
+    choose_test_threads(PARALLEL_THREAD_COUNT);
     attention_forward(mat_make(parallel_attention, ATTENTION_ROWS, CHANNELS),
                       mat_make(parallel_scores, SCORE_ROWS, TIME),
                       mat_make(qkv, ATTENTION_ROWS,
@@ -638,6 +945,12 @@ static void check_parallel_contracts(void)
            && memcmp(serial_d_scores, parallel_d_scores,
                      sizeof serial_d_scores) == 0,
            "threshold-crossing attention backward is thread-count invariant");
+}
+
+static void check_parallel_contracts(void)
+{
+    check_parallel_matmul();
+    check_parallel_attention();
 }
 
 /* -------- model contract and complete smoke run -------- */
@@ -679,8 +992,6 @@ static size_t architecture_parameter_count(ModelConfig cfg)
          + 2u * width;
 }
 
-static int models_equal(const Model *first, const Model *second);
-
 static int memory_reports_equal(ModelMemory first, ModelMemory second)
 {
     return first.parameter_bytes == second.parameter_bytes
@@ -690,7 +1001,7 @@ static int memory_reports_equal(ModelMemory first, ModelMemory second)
         && first.total_bytes == second.total_bytes;
 }
 
-static void check_model_config_contract(ModelConfig cfg)
+static void check_model_lower_limits(ModelConfig cfg)
 {
     expect(model_config_valid(cfg), "representative model config is valid");
 
@@ -731,8 +1042,12 @@ static void check_model_config_contract(ModelConfig cfg)
     invalid = cfg;
     invalid.batch_size = 0;
     expect(!model_config_valid(invalid), "model rejects an empty batch");
+}
 
+static void check_model_upper_limits(void)
+{
     ModelConfig boundary = maximum_config();
+    ModelConfig invalid;
 
     expect(model_config_valid(boundary), "documented model limits are inclusive");
 
@@ -764,7 +1079,13 @@ static void check_model_config_contract(ModelConfig cfg)
     expect(!model_config_valid(invalid), "model caps tokens in one pass");
 }
 
-static void check_model_memory_contract(void)
+static void check_model_config_contract(ModelConfig cfg)
+{
+    check_model_lower_limits(cfg);
+    check_model_upper_limits();
+}
+
+static ModelConfig showcase_config(void)
 {
     ModelConfig showcase = {
         .vocab_size  = 80,
@@ -775,6 +1096,11 @@ static void check_model_memory_contract(void)
         .batch_size  = 32,
     };
 
+    return showcase;
+}
+
+static void check_showcase_memory(ModelConfig showcase)
+{
     expect(model_config_valid(showcase), "showcase model config is valid");
     expect(architecture_parameter_count(showcase) == 815360,
            "showcase architecture has 815360 parameters");
@@ -800,7 +1126,10 @@ static void check_model_memory_contract(void)
            && maximum_memory.total_bytes
               > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES,
            "maximum valid geometry has a representable memory report");
+}
 
+static void check_memory_failure_contract(ModelConfig showcase)
+{
     ModelMemory sentinel = {
         .parameter_bytes  = 11,
         .activation_bytes = 22,
@@ -817,14 +1146,17 @@ static void check_model_memory_contract(void)
            "failed memory report leaves caller storage unchanged");
     expect(!model_memory_requirements(showcase, NULL),
            "memory report rejects a missing output record");
+}
 
+static void check_resource_bomb_memory(void)
+{
     ModelConfig resource_bomb = {
-        .vocab_size  = 1,
-        .block_size  = 1024,
-        .d_model     = 1,
-        .head_count  = 1,
-        .layer_count = 1,
-        .batch_size  = 1024,
+        .vocab_size  = MINIMUM_MODEL_EXTENT,
+        .block_size  = RESOURCE_BOMB_EXTENT,
+        .d_model     = MINIMUM_MODEL_EXTENT,
+        .head_count  = MINIMUM_MODEL_EXTENT,
+        .layer_count = MINIMUM_MODEL_EXTENT,
+        .batch_size  = RESOURCE_BOMB_EXTENT,
     };
     ModelMemory bomb_memory;
 
@@ -833,6 +1165,15 @@ static void check_model_memory_contract(void)
     expect(model_memory_requirements(resource_bomb, &bomb_memory)
            && bomb_memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES,
            "checkpoint memory preflight identifies an oversized arena");
+}
+
+static void check_model_memory_contract(void)
+{
+    ModelConfig showcase = showcase_config();
+
+    check_showcase_memory(showcase);
+    check_memory_failure_contract(showcase);
+    check_resource_bomb_memory();
 }
 
 static void check_constructed_model_contract(ModelConfig cfg)
@@ -882,26 +1223,9 @@ static void check_model_contract(void)
     check_constructed_model_contract(cfg);
 }
 
-static void check_optimizer_integration(void)
+static AdamW clipping_test_optimizer(void)
 {
-    Model *m = model_new(tiny_config(), 5);
-    ModelParams params = model_params(m);
-
-    for (int p = 0; p < params.count; p++) {
-        Mat values  = param_values(params.params[p]);
-        Mat gradient = param_gradient(params.params[p]);
-
-        memset(values.vals, 0, mat_size(values) * sizeof *values.vals);
-        memset(gradient.vals, 0, mat_size(gradient) * sizeof *gradient.vals);
-    }
-
-    Mat first_values   = param_values(params.params[0]);
-    Mat first_gradient = param_gradient(params.params[0]);
-
-    first_gradient.vals[0] = 3.0f;
-    first_gradient.vals[1] = 4.0f;
-
-    AdamW opt = {
+    AdamW optimizer = {
         .learning_rate = 1.0f,
         .beta1         = 0.0f,
         .beta2         = 0.0f,
@@ -909,7 +1233,53 @@ static void check_optimizer_integration(void)
         .weight_decay  = 0.0f,
     };
 
-    expect(model_step(m, opt, 1) == 0,
+    return optimizer;
+}
+
+static void clear_model_values_and_gradients(Model *model)
+{
+    ModelParams params = model_params(model);
+
+    for (int index = 0; index < params.count; index++) {
+        Mat values = param_values(params.params[index]);
+        Mat gradient = param_gradient(params.params[index]);
+
+        memset(values.vals, 0, mat_size(values) * sizeof *values.vals);
+        memset(gradient.vals, 0,
+               mat_size(gradient) * sizeof *gradient.vals);
+    }
+}
+
+static double model_gradient_norm(const Model *model)
+{
+    ModelParams params = model_params(model);
+    double norm_squared = 0.0;
+
+    for (int index = 0; index < params.count; index++) {
+        Mat gradient = param_gradient(params.params[index]);
+
+        for (size_t i = 0; i < mat_size(gradient); i++)
+            norm_squared += (double)gradient.vals[i] * gradient.vals[i];
+    }
+    return sqrt(norm_squared);
+}
+
+static void check_finite_gradient_clipping(void)
+{
+    Model *m = model_new(tiny_config(), 5);
+    ModelParams params = model_params(m);
+
+    clear_model_values_and_gradients(m);
+
+    Mat first_values   = param_values(params.params[0]);
+    Mat first_gradient = param_gradient(params.params[0]);
+
+    first_gradient.vals[0] = 3.0f;
+    first_gradient.vals[1] = 4.0f;
+
+    AdamW optimizer = clipping_test_optimizer();
+
+    expect(model_step(m, optimizer, FIRST_TRAINING_STEP) == 0,
            "ordinary finite optimizer step succeeds");
 
     expect(close_float(first_gradient.vals[0], 0.6f, 1e-6f),
@@ -917,15 +1287,7 @@ static void check_optimizer_integration(void)
     expect(close_float(first_gradient.vals[1], 0.8f, 1e-6f),
            "gradient clipping scales second component");
 
-    double norm_squared = 0.0;
-
-    for (int p = 0; p < params.count; p++) {
-        Mat gradient = param_gradient(params.params[p]);
-
-        for (size_t i = 0; i < mat_size(gradient); i++)
-            norm_squared += (double)gradient.vals[i] * gradient.vals[i];
-    }
-    expect(close_float((float)sqrt(norm_squared), 1.0f, 1e-6f),
+    expect(close_float((float)model_gradient_norm(m), 1.0f, 1e-6f),
            "global gradient norm is clipped to one");
     expect(close_float(first_gradient.vals[0] / first_gradient.vals[1],
                        3.0f / 4.0f, 1e-6f),
@@ -940,28 +1302,34 @@ static void check_optimizer_integration(void)
                "zero gradient leaves other values unchanged");
 
     model_free(m);
+}
 
+static void check_overflow_safe_gradient_clipping(void)
+{
     Model *huge = model_new(tiny_config(), 6);
     ModelParams huge_params = model_params(huge);
     Mat huge_gradient = param_gradient(huge_params.params[0]);
-    AdamW no_move = opt;
+    AdamW no_move = clipping_test_optimizer();
 
     no_move.learning_rate = 0.0f;
     huge_gradient.vals[0] = 3e20f;
     huge_gradient.vals[1] = 4e20f;
-    expect(model_step(huge, no_move, 1) == 0,
+    expect(model_step(huge, no_move, FIRST_TRAINING_STEP) == 0,
            "huge finite gradients take the overflow-safe clipping path");
     expect(finite_float(huge_gradient.vals[0])
            && finite_float(huge_gradient.vals[1]),
            "huge finite gradients stay finite after clipping");
     expect(close_float(huge_gradient.vals[0], 0.6f, 1e-6f)
            && close_float(huge_gradient.vals[1], 0.8f, 1e-6f),
-           "overflow-safe clipping preserves a huge gradient's direction");
+               "overflow-safe clipping preserves a huge gradient's direction");
     model_free(huge);
+}
 
+static void check_nonfinite_gradient_rejections(void)
+{
     static const uint32_t NONFINITE_BITS[] = {
-        0x7FC00000u,
-        0x7F800000u,
+        QUIET_NAN_BITS,
+        FLOAT_EXPONENT_MASK,
     };
     static const char *NONFINITE_LABELS[] = {
         "NaN gradient is rejected before any parameter update",
@@ -978,7 +1346,8 @@ static void check_optimizer_integration(void)
 
         bad_gradient.vals[0] = float_from_bits(NONFINITE_BITS[kind]);
         bad_gradient.vals[1] = 4.0f;
-        expect(model_step(bad, opt, 1) == -1
+        expect(model_step(bad, clipping_test_optimizer(),
+                          FIRST_TRAINING_STEP) == -1
                && float_bits(bad_gradient.vals[0]) == NONFINITE_BITS[kind]
                && bad_gradient.vals[1] == 4.0f
                && models_equal(bad, reference),
@@ -986,23 +1355,35 @@ static void check_optimizer_integration(void)
         model_free(reference);
         model_free(bad);
     }
+}
 
+static void check_invalid_optimizer_rejection(void)
+{
     Model *invalid_opt_model = model_new(tiny_config(), 8);
     Model *invalid_opt_reference = model_new(tiny_config(), 8);
     ModelParams invalid_params = model_params(invalid_opt_model);
     Mat invalid_gradient = param_gradient(invalid_params.params[0]);
-    AdamW invalid_opt = opt;
+    AdamW invalid_opt = clipping_test_optimizer();
 
     invalid_gradient.vals[0] = 3.0f;
     invalid_gradient.vals[1] = 4.0f;
-    invalid_opt.learning_rate = float_from_bits(0x7FC00000u);
-    expect(model_step(invalid_opt_model, invalid_opt, 1) == -1
+    invalid_opt.learning_rate = float_from_bits(QUIET_NAN_BITS);
+    expect(model_step(invalid_opt_model, invalid_opt,
+                      FIRST_TRAINING_STEP) == -1
            && invalid_gradient.vals[0] == 3.0f
            && invalid_gradient.vals[1] == 4.0f
            && models_equal(invalid_opt_model, invalid_opt_reference),
            "invalid optimizer settings are rejected before clipping");
     model_free(invalid_opt_reference);
     model_free(invalid_opt_model);
+}
+
+static void check_optimizer_integration(void)
+{
+    check_finite_gradient_clipping();
+    check_overflow_safe_gradient_clipping();
+    check_nonfinite_gradient_rejections();
+    check_invalid_optimizer_rejection();
 }
 
 static int models_equal(const Model *first, const Model *second)
@@ -1070,8 +1451,9 @@ static uint32_t fixture_crc32(uint32_t crc, const unsigned char *bytes,
 {
     for (size_t i = 0; i < count; i++) {
         crc ^= bytes[i];
-        for (int bit = 0; bit < 8; bit++)
-            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        for (int bit = 0; bit < CRC32_BITS_PER_BYTE; bit++)
+            crc = (crc >> 1)
+                ^ (CRC32_POLYNOMIAL & (0u - (crc & 1u)));
     }
     return crc;
 }
@@ -1095,8 +1477,8 @@ static int rewrite_checkpoint_checksum(const char *path)
     }
 
     long remaining = end - (long)sizeof(uint32_t);
-    uint32_t crc = 0xFFFFFFFFu;
-    unsigned char buffer[4096];
+    uint32_t crc = CRC32_INITIAL;
+    unsigned char buffer[CRC32_BUFFER_BYTES];
 
     while (remaining > 0) {
         size_t wanted =
@@ -1123,8 +1505,8 @@ static int rewrite_checkpoint_checksum(const char *path)
 static int write_resource_checkpoint(const char *path, ModelConfig cfg)
 {
     int32_t fields[] = {
-        (int32_t)0x43474154u,
-        1,
+        (int32_t)CHECKPOINT_MAGIC,
+        CHECKPOINT_CURRENT_VERSION,
         cfg.vocab_size,
         cfg.block_size,
         cfg.d_model,
@@ -1155,315 +1537,472 @@ static int write_resource_checkpoint(const char *path, ModelConfig cfg)
     return failed || rewrite_checkpoint_checksum(path) != 0 ? -1 : 0;
 }
 
-static void check_training_checkpoint_and_sampling(void)
+static AdamW smoke_optimizer(void)
 {
-    static const char TRAINING_TEXT[] = "\nabcabcabcabcabcabcabcabc\n";
-    static const char INPUT_TEXT[]    = "\nabc\nabc";
-    static const char TARGET_TEXT[]   = "abc\nabc\n";
-    enum { TOKENS = 8, TRAIN_STEPS = 60, SAMPLE_TOKENS = 32 };
-
-    Tokenizer *tk = tokenizer_new(TRAINING_TEXT, sizeof TRAINING_TEXT - 1);
-    ModelConfig cfg = tiny_config();
-    Model *m = model_new(cfg, 2024);
-    int inputs[TOKENS], targets[TOKENS];
-
-    expect(tokenizer_encode(tk, inputs, INPUT_TEXT, sizeof INPUT_TEXT - 1) == TOKENS,
-           "smoke inputs encode completely");
-    expect(tokenizer_encode(tk, targets, TARGET_TEXT, sizeof TARGET_TEXT - 1) == TOKENS,
-           "smoke targets encode completely");
-
-    float initial_loss = model_forward(m, inputs, targets, cfg.batch_size, cfg.block_size);
-    AdamW opt = {
-        .learning_rate = 0.02f,
-        .beta1         = 0.9f,
-        .beta2         = 0.999f,
-        .epsilon       = 1e-8f,
-        .weight_decay  = 0.01f,
+    AdamW optimizer = {
+        .learning_rate = SMOKE_LEARNING_RATE,
+        .beta1         = SMOKE_BETA1,
+        .beta2         = SMOKE_BETA2,
+        .epsilon       = SMOKE_EPSILON,
+        .weight_decay  = SMOKE_WEIGHT_DECAY,
     };
 
+    return optimizer;
+}
+
+static void smoke_fixture_init(SmokeFixture *fixture)
+{
+    memset(fixture, 0, sizeof *fixture);
+    fixture->tokenizer = tokenizer_new(
+        SMOKE_TRAINING_TEXT, sizeof SMOKE_TRAINING_TEXT - 1);
+    fixture->config = tiny_config();
+    fixture->model = model_new(fixture->config, SMOKE_MODEL_SEED);
+
+    expect(tokenizer_encode(fixture->tokenizer, fixture->inputs,
+                            SMOKE_INPUT_TEXT, sizeof SMOKE_INPUT_TEXT - 1)
+               == SMOKE_TOKENS,
+           "smoke inputs encode completely");
+    expect(tokenizer_encode(fixture->tokenizer, fixture->targets,
+                            SMOKE_TARGET_TEXT,
+                            sizeof SMOKE_TARGET_TEXT - 1)
+               == SMOKE_TOKENS,
+           "smoke targets encode completely");
+
+    fixture->initial_loss = model_forward(
+        fixture->model, fixture->inputs, fixture->targets,
+        fixture->config.batch_size, fixture->config.block_size);
+}
+
+static void train_smoke_fixture(SmokeFixture *fixture)
+{
+    AdamW optimizer = smoke_optimizer();
     int update_failed = 0;
 
-    for (int step = 1; step <= TRAIN_STEPS; step++) {
-        model_zero_gradients(m);
-        (void)model_forward(m, inputs, targets, cfg.batch_size, cfg.block_size);
-        model_backward(m);
-        if (model_step(m, opt, step) != 0) {
+    for (int step = FIRST_TRAINING_STEP;
+         step <= SMOKE_TRAIN_STEPS; step++) {
+        model_zero_gradients(fixture->model);
+        (void)model_forward(
+            fixture->model, fixture->inputs, fixture->targets,
+            fixture->config.batch_size, fixture->config.block_size);
+        model_backward(fixture->model);
+        if (model_step(fixture->model, optimizer, step) != 0) {
             update_failed = 1;
             break;
         }
     }
-    expect(!update_failed, "tiny training accepts every finite optimizer step");
+    expect(!update_failed,
+           "tiny training accepts every finite optimizer step");
 
-    float trained_loss = model_forward(m, inputs, targets, cfg.batch_size, cfg.block_size);
-
-    expect(finite_float(initial_loss) && finite_float(trained_loss),
+    fixture->trained_loss = model_forward(
+        fixture->model, fixture->inputs, fixture->targets,
+        fixture->config.batch_size, fixture->config.block_size);
+    expect(finite_float(fixture->initial_loss)
+               && finite_float(fixture->trained_loss),
            "tiny training losses stay finite");
-    expect(trained_loss < initial_loss * 0.5f,
+    expect(fixture->trained_loss
+               < fixture->initial_loss * SMOKE_LOSS_REMAINING_FRACTION,
            "tiny model overfits a repeating batch");
+}
 
-    char checkpoint[] = "/tmp/tiny-agenc-integration-checkpoint-XXXXXX";
-    char bad_magic[]  = "/tmp/tiny-agenc-integration-magic-XXXXXX";
-    char bad_version[] = "/tmp/tiny-agenc-integration-version-XXXXXX";
-    char bad_config[] = "/tmp/tiny-agenc-integration-config-XXXXXX";
-    char bad_tokens[] = "/tmp/tiny-agenc-integration-tokens-XXXXXX";
-    char corrupt[] = "/tmp/tiny-agenc-integration-corrupt-XXXXXX";
-    char nonfinite[] = "/tmp/tiny-agenc-integration-nonfinite-XXXXXX";
-    char truncated[]  = "/tmp/tiny-agenc-integration-truncated-XXXXXX";
-    char trailing[]   = "/tmp/tiny-agenc-integration-trailing-XXXXXX";
-    char resource[]   = "/tmp/tiny-agenc-integration-resource-XXXXXX";
-    char too_large[]  = "/tmp/tiny-agenc-integration-too-large-XXXXXX";
+static void smoke_fixture_free(SmokeFixture *fixture)
+{
+    if (fixture->model != NULL)
+        model_free(fixture->model);
+    if (fixture->tokenizer != NULL)
+        tokenizer_free(fixture->tokenizer);
+}
 
-    int paths_ready = temporary_path(checkpoint) == 0
-                   && temporary_path(bad_magic) == 0
-                   && temporary_path(bad_version) == 0
-                   && temporary_path(bad_config) == 0
-                   && temporary_path(bad_tokens) == 0
-                   && temporary_path(corrupt) == 0
-                   && temporary_path(nonfinite) == 0
-                   && temporary_path(truncated) == 0
-                   && temporary_path(trailing) == 0
-                   && temporary_path(resource) == 0
-                   && temporary_path(too_large) == 0;
+static CheckpointPaths checkpoint_paths(void)
+{
+    CheckpointPaths paths = {
+        .checkpoint = "/tmp/tiny-agenc-integration-checkpoint-XXXXXX",
+        .bad_magic  = "/tmp/tiny-agenc-integration-magic-XXXXXX",
+        .bad_version = "/tmp/tiny-agenc-integration-version-XXXXXX",
+        .bad_config = "/tmp/tiny-agenc-integration-config-XXXXXX",
+        .bad_tokens = "/tmp/tiny-agenc-integration-tokens-XXXXXX",
+        .corrupt    = "/tmp/tiny-agenc-integration-corrupt-XXXXXX",
+        .nonfinite  = "/tmp/tiny-agenc-integration-nonfinite-XXXXXX",
+        .truncated  = "/tmp/tiny-agenc-integration-truncated-XXXXXX",
+        .trailing   = "/tmp/tiny-agenc-integration-trailing-XXXXXX",
+        .resource   = "/tmp/tiny-agenc-integration-resource-XXXXXX",
+        .too_large  = "/tmp/tiny-agenc-integration-too-large-XXXXXX",
+    };
 
-    expect(paths_ready, "checkpoint tests reserve temporary paths");
-    if (!paths_ready) {
-        remove(checkpoint);
-        remove(bad_magic);
-        remove(bad_version);
-        remove(bad_config);
-        remove(bad_tokens);
-        remove(corrupt);
-        remove(nonfinite);
-        remove(truncated);
-        remove(trailing);
-        remove(resource);
-        remove(too_large);
-        model_free(m);
-        tokenizer_free(tk);
+    return paths;
+}
+
+static int reserve_checkpoint_paths(CheckpointPaths *paths)
+{
+    char *const path_list[CHECKPOINT_PATH_COUNT] = {
+        paths->checkpoint,
+        paths->bad_magic,
+        paths->bad_version,
+        paths->bad_config,
+        paths->bad_tokens,
+        paths->corrupt,
+        paths->nonfinite,
+        paths->truncated,
+        paths->trailing,
+        paths->resource,
+        paths->too_large,
+    };
+
+    for (int i = 0; i < CHECKPOINT_PATH_COUNT; i++) {
+        if (temporary_path(path_list[i]) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+static void remove_checkpoint_paths(const CheckpointPaths *paths)
+{
+    const char *const path_list[CHECKPOINT_PATH_COUNT] = {
+        paths->checkpoint,
+        paths->bad_magic,
+        paths->bad_version,
+        paths->bad_config,
+        paths->bad_tokens,
+        paths->corrupt,
+        paths->nonfinite,
+        paths->truncated,
+        paths->trailing,
+        paths->resource,
+        paths->too_large,
+    };
+
+    for (int i = 0; i < CHECKPOINT_PATH_COUNT; i++)
+        remove(path_list[i]);
+}
+
+static void check_sampling_replay(const SmokeFixture *fixture,
+                                  Model *loaded,
+                                  const Tokenizer *loaded_tokenizer)
+{
+    int original_ids[SMOKE_SAMPLE_TOKENS] = { 0 };
+    int repeated_ids[SMOKE_SAMPLE_TOKENS] = { 0 };
+    int loaded_ids[SMOKE_SAMPLE_TOKENS] = { 0 };
+    int prompt[SMOKE_PROMPT_TOKENS];
+    int loaded_prompt[SMOKE_PROMPT_TOKENS];
+
+    int prompt_count = tokenizer_encode(
+        fixture->tokenizer, prompt, SMOKE_PROMPT_TEXT,
+        sizeof SMOKE_PROMPT_TEXT - 1);
+    int loaded_prompt_count = tokenizer_encode(
+        loaded_tokenizer, loaded_prompt, SMOKE_PROMPT_TEXT,
+        sizeof SMOKE_PROMPT_TEXT - 1);
+
+    expect(prompt_count == SMOKE_PROMPT_TOKENS
+               && loaded_prompt_count == SMOKE_PROMPT_TOKENS
+               && memcmp(prompt, loaded_prompt, sizeof prompt) == 0,
+           "sampling prompt encodes completely");
+    memcpy(original_ids, prompt, sizeof prompt);
+    memcpy(repeated_ids, prompt, sizeof prompt);
+    memcpy(loaded_ids, loaded_prompt, sizeof loaded_prompt);
+
+    Rng *original_rng = rng_new(SMOKE_SAMPLE_SEED);
+    Rng *repeated_rng = rng_new(SMOKE_SAMPLE_SEED);
+    Rng *loaded_rng = rng_new(SMOKE_SAMPLE_SEED);
+
+    model_sample(fixture->model, original_rng, original_ids,
+                 SMOKE_PROMPT_TOKENS, SMOKE_SAMPLE_TOKENS,
+                 SMOKE_TEMPERATURE);
+    model_sample(fixture->model, repeated_rng, repeated_ids,
+                 SMOKE_PROMPT_TOKENS, SMOKE_SAMPLE_TOKENS,
+                 SMOKE_TEMPERATURE);
+    model_sample(loaded, loaded_rng, loaded_ids,
+                 SMOKE_PROMPT_TOKENS, SMOKE_SAMPLE_TOKENS,
+                 SMOKE_TEMPERATURE);
+
+    expect(memcmp(original_ids, repeated_ids, sizeof original_ids) == 0,
+           "seeded sampling replays exactly");
+    expect(memcmp(original_ids, loaded_ids, sizeof original_ids) == 0,
+           "loaded model continues the same seeded sample");
+    for (int i = SMOKE_PROMPT_TOKENS; i < SMOKE_SAMPLE_TOKENS; i++)
+        expect(original_ids[i] >= 0
+                   && original_ids[i] < fixture->config.vocab_size,
+               "sampling emits valid vocabulary ids");
+
+    rng_free(original_rng);
+    rng_free(repeated_rng);
+    rng_free(loaded_rng);
+}
+
+static void check_checkpoint_round_trip(const SmokeFixture *fixture,
+                                        const char *path)
+{
+    expect(model_save(fixture->model, fixture->tokenizer, path) == 0,
+           "trained model saves a checkpoint");
+
+    Tokenizer *loaded_tokenizer = NULL;
+    Model *loaded = model_load(&loaded_tokenizer, path);
+
+    expect(loaded != NULL && loaded_tokenizer != NULL,
+           "saved checkpoint loads");
+    if (loaded == NULL || loaded_tokenizer == NULL) {
+        if (loaded != NULL)
+            model_free(loaded);
+        if (loaded_tokenizer != NULL)
+            tokenizer_free(loaded_tokenizer);
         return;
     }
 
-    expect(model_save(m, tk, checkpoint) == 0, "trained model saves a checkpoint");
+    expect(models_equal(fixture->model, loaded),
+           "checkpoint preserves every parameter bit");
+    expect(tokenizer_vocab_size(loaded_tokenizer)
+               == tokenizer_vocab_size(fixture->tokenizer),
+           "checkpoint preserves vocabulary size");
+    for (int id = 0; id < tokenizer_vocab_size(fixture->tokenizer); id++)
+        expect(tokenizer_decode(loaded_tokenizer, id)
+                   == tokenizer_decode(fixture->tokenizer, id),
+               "checkpoint preserves vocabulary ids");
 
-    Tokenizer *loaded_tk = NULL;
-    Model     *loaded = model_load(&loaded_tk, checkpoint);
+    float loaded_loss = model_forward(
+        loaded, fixture->inputs, fixture->targets,
+        fixture->config.batch_size, fixture->config.block_size);
 
-    expect(loaded != NULL && loaded_tk != NULL, "saved checkpoint loads");
-    if (loaded != NULL && loaded_tk != NULL) {
-        expect(models_equal(m, loaded), "checkpoint preserves every parameter bit");
-        expect(tokenizer_vocab_size(loaded_tk) == tokenizer_vocab_size(tk),
-               "checkpoint preserves vocabulary size");
-        for (int id = 0; id < tokenizer_vocab_size(tk); id++)
-            expect(tokenizer_decode(loaded_tk, id) == tokenizer_decode(tk, id),
-                   "checkpoint preserves vocabulary ids");
+    expect(float_bits(loaded_loss) == float_bits(fixture->trained_loss),
+           "checkpoint preserves forward loss exactly");
+    check_sampling_replay(fixture, loaded, loaded_tokenizer);
 
-        float loaded_loss =
-            model_forward(loaded, inputs, targets, cfg.batch_size, cfg.block_size);
+    model_free(loaded);
+    tokenizer_free(loaded_tokenizer);
+}
 
-        expect(float_bits(loaded_loss) == float_bits(trained_loss),
-               "checkpoint preserves forward loss exactly");
-
-        int original_ids[SAMPLE_TOKENS] = { 0 };
-        int repeated_ids[SAMPLE_TOKENS] = { 0 };
-        int loaded_ids[SAMPLE_TOKENS]   = { 0 };
-        int prompt[2];
-
-        expect(tokenizer_encode(tk, prompt, "\na", 2) == 2,
-               "sampling prompt encodes completely");
-        memcpy(original_ids, prompt, sizeof prompt);
-        memcpy(repeated_ids, prompt, sizeof prompt);
-        memcpy(loaded_ids, prompt, sizeof prompt);
-
-        Rng *original_rng = rng_new(777);
-        Rng *repeated_rng = rng_new(777);
-        Rng *loaded_rng   = rng_new(777);
-
-        model_sample(m, original_rng, original_ids, 2, SAMPLE_TOKENS, 0.8f);
-        model_sample(m, repeated_rng, repeated_ids, 2, SAMPLE_TOKENS, 0.8f);
-        model_sample(loaded, loaded_rng, loaded_ids, 2, SAMPLE_TOKENS, 0.8f);
-
-        expect(memcmp(original_ids, repeated_ids, sizeof original_ids) == 0,
-               "seeded sampling replays exactly");
-        expect(memcmp(original_ids, loaded_ids, sizeof original_ids) == 0,
-               "loaded model continues the same seeded sample");
-        for (int i = 2; i < SAMPLE_TOKENS; i++)
-            expect(original_ids[i] >= 0 && original_ids[i] < cfg.vocab_size,
-                   "sampling emits valid vocabulary ids");
-
-        rng_free(original_rng);
-        rng_free(repeated_rng);
-        rng_free(loaded_rng);
-    }
-
-    expect(model_save(m, tk, bad_magic) == 0,
+static void check_header_rejections(const SmokeFixture *fixture,
+                                    const CheckpointPaths *paths)
+{
+    expect(model_save(fixture->model, fixture->tokenizer,
+                      paths->bad_magic) == 0,
            "malformed checkpoint fixture saves");
-    uint32_t legacy_magic = 0x4B524754u;
-
-    expect(overwrite_file_bytes(bad_magic, 0, &legacy_magic,
-                                sizeof legacy_magic) == 0
-           && rewrite_checkpoint_checksum(bad_magic) == 0,
+    expect(overwrite_file_bytes(paths->bad_magic, 0,
+                                &LEGACY_CHECKPOINT_MAGIC,
+                                sizeof LEGACY_CHECKPOINT_MAGIC) == 0
+               && rewrite_checkpoint_checksum(paths->bad_magic) == 0,
            "legacy checkpoint fixture rewrites magic and checksum");
-    expect_load_failure(bad_magic, tk,
+    expect_load_failure(paths->bad_magic, fixture->tokenizer,
                         "checkpoint cleanly rejects the legacy format");
 
-    int32_t changed_version = 2;
+    int32_t changed_version = UNSUPPORTED_CHECKPOINT_VERSION;
+    long version_offset = CHECKPOINT_VERSION_FIELD_INDEX
+                        * (long)sizeof(int32_t);
 
-    expect(model_save(m, tk, bad_version) == 0,
+    expect(model_save(fixture->model, fixture->tokenizer,
+                      paths->bad_version) == 0,
            "bad-version checkpoint fixture saves");
-    expect(overwrite_file_bytes(bad_version, (long)sizeof(int32_t),
-                                &changed_version, sizeof changed_version) == 0
-           && rewrite_checkpoint_checksum(bad_version) == 0,
+    expect(overwrite_file_bytes(paths->bad_version, version_offset,
+                                &changed_version,
+                                sizeof changed_version) == 0
+               && rewrite_checkpoint_checksum(paths->bad_version) == 0,
            "bad-version checkpoint fixture changes its version");
-    expect_load_failure(bad_version, tk, "checkpoint rejects unknown version");
+    expect_load_failure(paths->bad_version, fixture->tokenizer,
+                        "checkpoint rejects unknown version");
 
     int32_t invalid_vocab_size = 0;
+    long vocabulary_size_offset = CHECKPOINT_VOCABULARY_SIZE_FIELD_INDEX
+                                * (long)sizeof(int32_t);
 
-    expect(model_save(m, tk, bad_config) == 0,
+    expect(model_save(fixture->model, fixture->tokenizer,
+                      paths->bad_config) == 0,
            "invalid-config checkpoint fixture saves");
-    expect(overwrite_file_bytes(bad_config, 2L * (long)sizeof(int32_t),
+    expect(overwrite_file_bytes(paths->bad_config, vocabulary_size_offset,
                                 &invalid_vocab_size,
                                 sizeof invalid_vocab_size) == 0
-           && rewrite_checkpoint_checksum(bad_config) == 0,
+               && rewrite_checkpoint_checksum(paths->bad_config) == 0,
            "invalid-config checkpoint fixture changes a dimension");
-    expect_load_failure(bad_config, tk, "checkpoint rejects invalid dimensions");
+    expect_load_failure(paths->bad_config, fixture->tokenizer,
+                        "checkpoint rejects invalid dimensions");
+}
 
+static void check_resource_rejections(const SmokeFixture *fixture,
+                                      const CheckpointPaths *paths)
+{
     ModelConfig resource_bomb = {
-        .vocab_size  = 1,
-        .block_size  = 1024,
-        .d_model     = 1,
-        .head_count  = 1,
-        .layer_count = 1,
-        .batch_size  = 1024,
+        .vocab_size  = MINIMUM_MODEL_EXTENT,
+        .block_size  = RESOURCE_BOMB_EXTENT,
+        .d_model     = MINIMUM_MODEL_EXTENT,
+        .head_count  = MINIMUM_MODEL_EXTENT,
+        .layer_count = MINIMUM_MODEL_EXTENT,
+        .batch_size  = RESOURCE_BOMB_EXTENT,
     };
 
-    expect(write_resource_checkpoint(resource, resource_bomb) == 0,
+    expect(write_resource_checkpoint(paths->resource, resource_bomb) == 0,
            "resource-bomb fixture is complete and has a valid checksum");
-    expect_load_failure(resource, tk,
-                        "checkpoint rejects oversized arenas before payload parsing");
+    expect_load_failure(
+        paths->resource, fixture->tokenizer,
+        "checkpoint rejects oversized arenas before payload parsing");
 
-    FILE *too_large_stream = fopen(too_large, "r+b");
+    FILE *stream = fopen(paths->too_large, "r+b");
 
-    expect(too_large_stream != NULL, "oversized-file fixture opens");
-    if (too_large_stream != NULL) {
-        expect(ftruncate(fileno(too_large_stream),
-                         (off_t)MODEL_MAX_CHECKPOINT_FILE_BYTES + 1) == 0,
-               "oversized-file fixture creates a sparse file");
-        expect(fclose(too_large_stream) == 0,
-               "oversized-file fixture closes");
-        expect_load_failure(too_large, tk,
-                            "checkpoint rejects oversized files before checksum work");
-    }
+    expect(stream != NULL, "oversized-file fixture opens");
+    if (stream == NULL)
+        return;
 
-    unsigned char descending_tokens[2] = { 'z', 'a' };
-    long vocabulary_offset = 9L * (long)sizeof(int32_t);
+    expect(ftruncate(fileno(stream),
+                     (off_t)MODEL_MAX_CHECKPOINT_FILE_BYTES + 1) == 0,
+           "oversized-file fixture creates a sparse file");
+    expect(fclose(stream) == 0, "oversized-file fixture closes");
+    expect_load_failure(
+        paths->too_large, fixture->tokenizer,
+        "checkpoint rejects oversized files before checksum work");
+}
 
-    expect(model_save(m, tk, bad_tokens) == 0,
+static long checkpoint_vocabulary_offset(void)
+{
+    return CHECKPOINT_HEADER_FIELD_COUNT * (long)sizeof(int32_t);
+}
+
+static long checkpoint_parameter_offset(const Tokenizer *tokenizer)
+{
+    return checkpoint_vocabulary_offset()
+         + (long)tokenizer_vocab_size(tokenizer);
+}
+
+static void check_tokenizer_rejection(const SmokeFixture *fixture,
+                                      const char *path)
+{
+    static const unsigned char DESCENDING_TOKENS[] = { 'z', 'a' };
+
+    expect(model_save(fixture->model, fixture->tokenizer, path) == 0,
            "bad-tokenizer checkpoint fixture saves");
-    expect(overwrite_file_bytes(bad_tokens, vocabulary_offset,
-                                descending_tokens,
-                                sizeof descending_tokens) == 0
-           && rewrite_checkpoint_checksum(bad_tokens) == 0,
+    expect(overwrite_file_bytes(path, checkpoint_vocabulary_offset(),
+                                DESCENDING_TOKENS,
+                                sizeof DESCENDING_TOKENS) == 0
+               && rewrite_checkpoint_checksum(path) == 0,
            "bad-tokenizer checkpoint fixture changes vocabulary order");
-    expect_load_failure(bad_tokens, tk,
+    expect_load_failure(path, fixture->tokenizer,
                         "checkpoint rejects malformed tokenizer order");
+}
 
-    uint32_t nan_bits = 0x7FC00000u;
-    long parameter_offset =
-        vocabulary_offset + (long)tokenizer_vocab_size(tk);
+static void check_parameter_payload_rejections(
+    const SmokeFixture *fixture, const CheckpointPaths *paths)
+{
+    static const unsigned char LOW_PAYLOAD_BIT_FLIP = 1;
+    long parameter_offset = checkpoint_parameter_offset(fixture->tokenizer);
 
-    unsigned char finite_bit_flip = 1;
-
-    expect(model_save(m, tk, corrupt) == 0,
+    expect(model_save(fixture->model, fixture->tokenizer,
+                      paths->corrupt) == 0,
            "checksum-corruption checkpoint fixture saves");
-    expect(overwrite_file_bytes(corrupt, parameter_offset,
-                                &finite_bit_flip,
-                                sizeof finite_bit_flip) == 0,
+    expect(overwrite_file_bytes(paths->corrupt, parameter_offset,
+                                &LOW_PAYLOAD_BIT_FLIP,
+                                sizeof LOW_PAYLOAD_BIT_FLIP) == 0,
            "checksum-corruption fixture flips one finite payload byte");
-    expect_load_failure(corrupt, tk,
+    expect_load_failure(paths->corrupt, fixture->tokenizer,
                         "checkpoint checksum rejects finite bit corruption");
 
-    expect(model_save(m, tk, nonfinite) == 0,
+    expect(model_save(fixture->model, fixture->tokenizer,
+                      paths->nonfinite) == 0,
            "non-finite checkpoint fixture saves");
-    expect(overwrite_file_bytes(nonfinite, parameter_offset,
-                                &nan_bits, sizeof nan_bits) == 0
-           && rewrite_checkpoint_checksum(nonfinite) == 0,
+    expect(overwrite_file_bytes(paths->nonfinite, parameter_offset,
+                                &QUIET_NAN_BITS,
+                                sizeof QUIET_NAN_BITS) == 0
+               && rewrite_checkpoint_checksum(paths->nonfinite) == 0,
            "non-finite checkpoint fixture changes a parameter");
-    expect_load_failure(nonfinite, tk,
+    expect_load_failure(paths->nonfinite, fixture->tokenizer,
                         "checkpoint rejects non-finite parameter payload");
+}
 
-    expect(model_save(m, tk, truncated) == 0,
+static void check_length_rejections(const SmokeFixture *fixture,
+                                    const CheckpointPaths *paths)
+{
+    expect(model_save(fixture->model, fixture->tokenizer,
+                      paths->truncated) == 0,
            "truncated-payload checkpoint fixture saves");
-    FILE *truncated_stream = fopen(truncated, "r+b");
+    FILE *truncated = fopen(paths->truncated, "r+b");
 
-    expect(truncated_stream != NULL, "truncated-payload fixture opens");
-    if (truncated_stream != NULL) {
-        expect(fseek(truncated_stream, -1, SEEK_END) == 0,
+    expect(truncated != NULL, "truncated-payload fixture opens");
+    if (truncated != NULL) {
+        expect(fseek(truncated, LAST_FILE_BYTE_OFFSET, SEEK_END) == 0,
                "truncated-payload fixture finds its last byte");
+        long shortened_size = ftell(truncated);
 
-        long shortened_size = ftell(truncated_stream);
-
-        expect(shortened_size > 0, "truncated-payload fixture has a payload");
+        expect(shortened_size > 0,
+               "truncated-payload fixture has a payload");
         expect(shortened_size > 0
-               && ftruncate(fileno(truncated_stream), shortened_size) == 0,
+                   && ftruncate(fileno(truncated), shortened_size) == 0,
                "truncated-payload fixture removes its last byte");
-        expect(fclose(truncated_stream) == 0,
+        expect(fclose(truncated) == 0,
                "truncated-payload fixture closes");
-        expect_load_failure(truncated, tk, "checkpoint rejects truncated payload");
+        expect_load_failure(paths->truncated, fixture->tokenizer,
+                            "checkpoint rejects truncated payload");
     }
 
-    expect(model_save(m, tk, trailing) == 0,
+    expect(model_save(fixture->model, fixture->tokenizer,
+                      paths->trailing) == 0,
            "trailing-payload checkpoint fixture saves");
-    FILE *trailing_stream = fopen(trailing, "ab");
+    FILE *trailing = fopen(paths->trailing, "ab");
 
-    expect(trailing_stream != NULL, "trailing-payload fixture opens");
-    if (trailing_stream != NULL) {
-        unsigned char extra = 0xA5u;
+    expect(trailing != NULL, "trailing-payload fixture opens");
+    if (trailing != NULL) {
+        static const unsigned char TRAILING_SENTINEL = 0xA5u;
 
-        expect(fwrite(&extra, 1, 1, trailing_stream) == 1,
+        expect(fwrite(&TRAILING_SENTINEL, sizeof TRAILING_SENTINEL,
+                      1, trailing) == 1,
                "trailing-payload fixture appends a byte");
-        expect(fclose(trailing_stream) == 0,
+        expect(fclose(trailing) == 0,
                "trailing-payload fixture closes");
-        expect_load_failure(trailing, tk, "checkpoint rejects trailing payload");
+        expect_load_failure(paths->trailing, fixture->tokenizer,
+                            "checkpoint rejects trailing payload");
     }
+}
 
-    ModelParams params = model_params(m);
-    Mat first_values = param_values(params.params[0]);
-    uint32_t saved_parameter_bits = float_bits(first_values.vals[0]);
+static void check_failed_save_preserves_checkpoint(
+    SmokeFixture *fixture, const char *path)
+{
+    ModelParams params = model_params(fixture->model);
+    Mat first_values = param_values(params.params[FIRST_PARAMETER]);
+    uint32_t saved_bits = float_bits(first_values.vals[FIRST_PARAMETER_VALUE]);
 
-    memcpy(&first_values.vals[0], &nan_bits, sizeof nan_bits);
-    expect(model_save(m, tk, checkpoint) != 0,
+    memcpy(&first_values.vals[FIRST_PARAMETER_VALUE], &QUIET_NAN_BITS,
+           sizeof QUIET_NAN_BITS);
+    expect(model_save(fixture->model, fixture->tokenizer, path) != 0,
            "checkpoint save rejects non-finite parameters");
-    memcpy(&first_values.vals[0], &saved_parameter_bits,
-           sizeof saved_parameter_bits);
+    memcpy(&first_values.vals[FIRST_PARAMETER_VALUE], &saved_bits,
+           sizeof saved_bits);
 
-    Tokenizer *preserved_tk = NULL;
-    Model *preserved = model_load(&preserved_tk, checkpoint);
+    Tokenizer *preserved_tokenizer = NULL;
+    Model *preserved = model_load(&preserved_tokenizer, path);
 
-    expect(preserved != NULL && preserved_tk != NULL
-           && models_equal(m, preserved),
+    expect(preserved != NULL && preserved_tokenizer != NULL
+               && models_equal(fixture->model, preserved),
            "failed atomic save preserves the previous checkpoint");
     if (preserved != NULL)
         model_free(preserved);
-    if (preserved_tk != NULL)
-        tokenizer_free(preserved_tk);
+    if (preserved_tokenizer != NULL)
+        tokenizer_free(preserved_tokenizer);
+}
 
-    if (loaded != NULL)
-        model_free(loaded);
-    if (loaded_tk != NULL)
-        tokenizer_free(loaded_tk);
-    remove(checkpoint);
-    remove(bad_magic);
-    remove(bad_version);
-    remove(bad_config);
-    remove(bad_tokens);
-    remove(corrupt);
-    remove(nonfinite);
-    remove(truncated);
-    remove(trailing);
-    remove(resource);
-    remove(too_large);
-    model_free(m);
-    tokenizer_free(tk);
+static void check_training_checkpoint_and_sampling(void)
+{
+    SmokeFixture fixture;
+
+    smoke_fixture_init(&fixture);
+    train_smoke_fixture(&fixture);
+
+    CheckpointPaths paths = checkpoint_paths();
+    int paths_ready = reserve_checkpoint_paths(&paths) == 0;
+
+    expect(paths_ready, "checkpoint tests reserve temporary paths");
+    if (!paths_ready) {
+        remove_checkpoint_paths(&paths);
+        smoke_fixture_free(&fixture);
+        return;
+    }
+
+    check_checkpoint_round_trip(&fixture, paths.checkpoint);
+
+    check_header_rejections(&fixture, &paths);
+
+    check_resource_rejections(&fixture, &paths);
+
+    check_tokenizer_rejection(&fixture, paths.bad_tokens);
+
+    check_parameter_payload_rejections(&fixture, &paths);
+
+    check_length_rejections(&fixture, &paths);
+
+    check_failed_save_preserves_checkpoint(&fixture, paths.checkpoint);
+    remove_checkpoint_paths(&paths);
+    smoke_fixture_free(&fixture);
 }
 
 static void usage(const char *program)

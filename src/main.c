@@ -49,11 +49,23 @@ enum {
     VALIDATION_BATCHES  = TINY_AGENC_VALIDATION_BATCHES,
     DEFAULT_TAIL_LENGTH = 400,     /* characters `sample` generates */
     MAX_TAIL_LENGTH     = 1 << 24,
+    DECIMAL_RADIX       = 10,
+    BYTES_PER_MEBIBYTE  = 1024 * 1024,
+    NEWLINE_BYTE_COUNT  = 1,
+    SAMPLE_SEED_TOKENS  = 1,
+    LOGICAL_THREADS_PER_PHYSICAL_CORE = 2,
+    COMMAND_ARGUMENT_INDEX = 1,
+    TOP_LEVEL_COMMAND_ARGUMENTS = 2,
+    MINIMUM_OPTION_VALUE = 1,
+    NEXT_TOKEN_OFFSET = 1,
+    FIRST_TRAINING_STEP = 1,
 };
 
-static const float              DEFAULT_LEARNING_RATE   = 1e-3f;
-static const float              DEFAULT_TEMPERATURE     = 0.8f;
+static const float DEFAULT_LEARNING_RATE = 1e-3f;
+static const float DEFAULT_TEMPERATURE = 0.8f;
+static const float MAX_FLAG_VALUE = 1e6f;
 static const unsigned long long DEFAULT_SEED = TINY_AGENC_DEFAULT_SEED;
+static const uint32_t FLOAT_EXPONENT_BITS = 0x7F800000u;
 /* Keep progress-sample draws from changing which corpus windows train next. */
 static const unsigned long long SAMPLE_SEED_OFFSET =
     TINY_AGENC_SAMPLE_SEED_OFFSET;
@@ -68,6 +80,133 @@ static const float ADAM_BETA1   = 0.9f;
 static const float ADAM_BETA2   = 0.999f;
 static const float ADAM_EPSILON = 1e-8f;
 static const float WEIGHT_DECAY = 0.01f;
+
+typedef struct {
+    const char *data_path;
+    const char *validation_path;
+    const char *out_path;
+    int         steps;
+    ModelConfig cfg;   /* vocab_size filled in after reading the corpus */
+    float       learning_rate;
+    unsigned long long seed;
+} TrainOptions;
+
+typedef struct {
+    Tokenizer *tokenizer;
+    Dataset   *training_data;
+    Dataset   *validation_data;
+    Model     *model;
+    Rng       *batch_rng;
+    Rng       *sample_rng;
+} TrainingResources;
+
+typedef struct {
+    int *inputs;
+    int *targets;
+    int  count;
+} ValidationBatches;
+
+typedef struct {
+    int   *inputs;
+    int   *targets;
+    AdamW  optimizer;
+} TrainingStepState;
+
+typedef struct {
+    ValidationBatches validation;
+    double            clock;
+    int               timed_steps;
+} TrainingObservationState;
+
+typedef struct {
+    const char *model_path;
+    const char *prompt;
+    int         length;
+    float       temperature;
+    unsigned long long seed;
+} SampleOptions;
+
+static void print_usage(FILE *stream);
+_Noreturn static void usage_error(const char *format, ...);
+_Noreturn static void invalid_option(const char *command, int argc,
+                                     char **argv);
+static int parse_int(const char *text, int min, int max, const char *what);
+static int is_finite_number(float value);
+static float parse_positive(const char *text, const char *what);
+static unsigned long long parse_seed(const char *text);
+static AdamW adamw_with_rate(float learning_rate);
+static int paths_name_same_file(const char *first, const char *second);
+static void print_text(const Tokenizer *tk, const int *ids, int count);
+static void print_architecture(FILE *stream, const Model *m);
+static int newline_id(const Tokenizer *tk);
+static void reject_training_path_collisions(const TrainOptions *options);
+static char *read_training_text(const TrainOptions *options, size_t *length);
+static Dataset *load_training_data(const TrainOptions *options,
+                                   Tokenizer **tokenizer);
+static char *read_validation_text(const TrainOptions *options,
+                                  size_t *length);
+static Dataset *load_validation_data(const TrainOptions *options,
+                                     const Tokenizer *tokenizer);
+static void validate_training_model(TrainOptions *options,
+                                    const Tokenizer *tokenizer);
+static TrainingResources prepare_training_resources(TrainOptions *options);
+static void print_training_summary(const TrainingResources *resources,
+                                   const TrainOptions *options);
+static void free_training_resources(TrainingResources resources);
+static ValidationBatches prepare_validation(const Dataset *ds,
+                                            const TrainOptions *options);
+static float measure_validation(Model *m, ValidationBatches validation,
+                                const TrainOptions *options);
+static void free_validation(ValidationBatches validation);
+static void print_training_sample(Model *m, const Tokenizer *tk, Rng *rng,
+                                  int step);
+static TrainingStepState prepare_training_step_state(
+    const TrainOptions *options);
+static void free_training_step_state(TrainingStepState state);
+static TrainingObservationState prepare_training_observation(
+    const TrainingResources *resources, const TrainOptions *options);
+static void free_training_observation(TrainingObservationState state);
+static float run_training_step(TrainingResources *resources,
+                               TrainingStepState *state,
+                               const TrainOptions *options, int step);
+static void restart_training_timer(TrainingObservationState *state);
+static void print_training_report(TrainingResources *resources,
+                                  TrainingObservationState *state,
+                                  const TrainOptions *options, int step,
+                                  float loss, double milliseconds);
+static void report_training_if_due(TrainingResources *resources,
+                                   TrainingObservationState *state,
+                                   const TrainOptions *options, int step,
+                                   float loss);
+static void sample_training_if_due(TrainingResources *resources,
+                                   TrainingObservationState *state,
+                                   int step);
+static void save_training_if_due(TrainingResources *resources,
+                                 TrainingObservationState *state,
+                                 const TrainOptions *options, int step);
+static void train_loop(TrainingResources *resources,
+                       const TrainOptions *options);
+static int run_train(TrainOptions options);
+static TrainOptions default_train_options(void);
+static void parse_train_option(TrainOptions *options, int letter,
+                               int argc, char **argv);
+static void validate_train_options(const TrainOptions *options,
+                                   int argc, char **argv);
+static int parse_train(int argc, char **argv);
+static int run_sample(SampleOptions options);
+static SampleOptions default_sample_options(void);
+static void parse_sample_option(SampleOptions *options, int letter,
+                                int argc, char **argv);
+static void validate_sample_options(const SampleOptions *options,
+                                    int argc, char **argv);
+static int parse_sample(int argc, char **argv);
+static void choose_thread_count(void);
+static void configure_runtime(void);
+static int is_standalone_argument(int argc, char **argv,
+                                  const char *expected);
+static int dispatch_subcommand(int argc, char **argv);
+static int dispatch_command_line(int argc, char **argv);
+int main(int argc, char **argv);
 
 static void print_usage(FILE *stream)
 {
@@ -110,7 +249,7 @@ _Noreturn static void invalid_option(const char *command, int argc, char **argv)
 static int parse_int(const char *text, int min, int max, const char *what)
 {
     char *end;
-    long  value = strtol(text, &end, 10);
+    long  value = strtol(text, &end, DECIMAL_RADIX);
 
     if (*text == '\0' || *end != '\0' || value < min || value > max)
         die("%s wants an integer in [%d, %d], not '%s'", what, min, max, text);
@@ -123,9 +262,6 @@ static int parse_int(const char *text, int min, int max, const char *what)
  * (Under -ffast-math's flush-to-zero, positive subnormals compare
  * equal to zero and are rejected too: intentional, since they would
  * train as zero anyway.) */
-static const float    MAX_FLAG_VALUE      = 1e6f;
-static const uint32_t FLOAT_EXPONENT_BITS = 0x7F800000u;
-
 static int is_finite_number(float value)
 {
     uint32_t bits;
@@ -154,7 +290,7 @@ static unsigned long long parse_seed(const char *text)
      * value and silently clamp overflow, both lies about the seed. */
     errno = 0;
 
-    unsigned long long value = strtoull(text, &end, 10);
+    unsigned long long value = strtoull(text, &end, DECIMAL_RADIX);
 
     if (!isdigit((unsigned char)text[0]) || *end != '\0' || errno == ERANGE)
         die("--seed wants a whole number, not '%s'", text);
@@ -165,7 +301,13 @@ static unsigned long long parse_seed(const char *text)
 
 static AdamW adamw_with_rate(float learning_rate)
 {
-    AdamW opt = { learning_rate, ADAM_BETA1, ADAM_BETA2, ADAM_EPSILON, WEIGHT_DECAY };
+    AdamW opt = {
+        .learning_rate = learning_rate,
+        .beta1 = ADAM_BETA1,
+        .beta2 = ADAM_BETA2,
+        .epsilon = ADAM_EPSILON,
+        .weight_decay = WEIGHT_DECAY,
+    };
 
     return opt;
 }
@@ -202,7 +344,7 @@ static void print_architecture(FILE *stream, const Model *m)
             "tiny-agenc: %zu parameters | %.1f MiB buffers | "
             "vocab %d | %d layers x %d heads x %d wide\n",
             model_parameter_count(m),
-            (double)memory.total_bytes / (1024.0 * 1024.0),
+            (double)memory.total_bytes / BYTES_PER_MEBIBYTE,
             cfg.vocab_size, cfg.layer_count, cfg.head_count, cfg.d_model);
 }
 
@@ -212,31 +354,13 @@ static int newline_id(const Tokenizer *tk)
 {
     int id;
 
-    if (tokenizer_encode(tk, &id, "\n", 1) != 1)
+    if (tokenizer_encode(tk, &id, "\n", NEWLINE_BYTE_COUNT)
+        != NEWLINE_BYTE_COUNT)
         die("corpus vocabulary has no newline to seed sampling with");
     return id;
 }
 
 /* -------- train -------- */
-
-typedef struct {
-    const char *data_path;
-    const char *validation_path;
-    const char *out_path;
-    int         steps;
-    ModelConfig cfg;   /* vocab_size filled in after reading the corpus */
-    float       learning_rate;
-    unsigned long long seed;
-} TrainOptions;
-
-typedef struct {
-    Tokenizer *tokenizer;
-    Dataset   *training_data;
-    Dataset   *validation_data;
-    Model     *model;
-    Rng       *batch_rng;
-    Rng       *sample_rng;
-} TrainingResources;
 
 static void reject_training_path_collisions(const TrainOptions *options)
 {
@@ -297,7 +421,8 @@ static Dataset *load_training_data(const TrainOptions *options,
     if (dataset == NULL)
         die("corpus %s cannot fit in a token buffer on this platform",
             options->data_path);
-    if (dataset_token_count(dataset) < (size_t)options->cfg.block_size + 1)
+    if (dataset_token_count(dataset)
+        < (size_t)options->cfg.block_size + NEXT_TOKEN_OFFSET)
         die("corpus %s is smaller than one training window",
             options->data_path);
     return dataset;
@@ -335,7 +460,8 @@ static Dataset *load_validation_data(const TrainOptions *options,
     if (dataset_token_count(dataset) != length)
         die("validation corpus %s contains bytes absent from training data",
             options->validation_path);
-    if (dataset_token_count(dataset) < (size_t)options->cfg.block_size + 1)
+    if (dataset_token_count(dataset)
+        < (size_t)options->cfg.block_size + NEXT_TOKEN_OFFSET)
         die("validation corpus %s is smaller than one training window",
             options->validation_path);
     return dataset;
@@ -356,8 +482,9 @@ static void validate_training_model(TrainOptions *options,
         die("model memory requirements overflow this platform");
     if (memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES)
         die("model needs %.1f MiB of buffers; the CLI limit is %.0f MiB",
-            (double)memory.total_bytes / (1024.0 * 1024.0),
-            (double)MODEL_MAX_CHECKPOINT_RESIDENT_BYTES / (1024.0 * 1024.0));
+            (double)memory.total_bytes / BYTES_PER_MEBIBYTE,
+            (double)MODEL_MAX_CHECKPOINT_RESIDENT_BYTES
+                / BYTES_PER_MEBIBYTE);
 }
 
 static TrainingResources prepare_training_resources(TrainOptions *options)
@@ -397,12 +524,6 @@ static void free_training_resources(TrainingResources resources)
     dataset_free(resources.training_data);
     tokenizer_free(resources.tokenizer);
 }
-
-typedef struct {
-    int *inputs;
-    int *targets;
-    int  count;
-} ValidationBatches;
 
 static ValidationBatches prepare_validation(const Dataset *ds,
                                             const TrainOptions *options)
@@ -451,26 +572,16 @@ static void free_validation(ValidationBatches validation)
 
 static void print_training_sample(Model *m, const Tokenizer *tk, Rng *rng, int step)
 {
-    int ids[1 + SAMPLE_LENGTH];
+    int ids[SAMPLE_SEED_TOKENS + SAMPLE_LENGTH];
 
     ids[0] = newline_id(tk);
-    model_sample(m, rng, ids, 1, 1 + SAMPLE_LENGTH, DEFAULT_TEMPERATURE);
+    model_sample(m, rng, ids, SAMPLE_SEED_TOKENS,
+                 SAMPLE_SEED_TOKENS + SAMPLE_LENGTH,
+                 DEFAULT_TEMPERATURE);
     printf("---- sample at step %d ----\n", step);
-    print_text(tk, ids + 1, SAMPLE_LENGTH);
+    print_text(tk, ids + SAMPLE_SEED_TOKENS, SAMPLE_LENGTH);
     printf("---------------------------\n");
 }
-
-typedef struct {
-    int   *inputs;
-    int   *targets;
-    AdamW  optimizer;
-} TrainingStepState;
-
-typedef struct {
-    ValidationBatches validation;
-    double            clock;
-    int               timed_steps;
-} TrainingObservationState;
 
 static TrainingStepState prepare_training_step_state(
     const TrainOptions *options)
@@ -545,10 +656,10 @@ static void print_training_report(TrainingResources *resources,
         printf("step %5d/%d | loss %.4f | val %.4f | %6.1f ms/step\n",
                step, options->steps, (double)loss,
                (double)validation_loss, milliseconds);
-    } else {
-        printf("step %5d/%d | loss %.4f | %6.1f ms/step\n",
-               step, options->steps, (double)loss, milliseconds);
+        return;
     }
+    printf("step %5d/%d | loss %.4f | %6.1f ms/step\n",
+           step, options->steps, (double)loss, milliseconds);
 }
 
 static void report_training_if_due(TrainingResources *resources,
@@ -556,44 +667,47 @@ static void report_training_if_due(TrainingResources *resources,
                                    const TrainOptions *options,
                                    int step, float loss)
 {
-    if (step == 1 || step % LOSS_INTERVAL == 0) {
-        double now = time_seconds();
-        double milliseconds =
-            MILLISECONDS_PER_SECOND
-            * (now - state->clock) / state->timed_steps;
+    if (step != FIRST_TRAINING_STEP && step % LOSS_INTERVAL != 0)
+        return;
 
-        print_training_report(resources, state, options, step, loss,
-                              milliseconds);
-        restart_training_timer(state);
-    }
+    double now = time_seconds();
+    double milliseconds =
+        MILLISECONDS_PER_SECOND
+        * (now - state->clock) / state->timed_steps;
+
+    print_training_report(resources, state, options, step, loss,
+                          milliseconds);
+    restart_training_timer(state);
 }
 
 static void sample_training_if_due(TrainingResources *resources,
                                    TrainingObservationState *state, int step)
 {
-    if (step % SAMPLE_INTERVAL == 0) {
-        print_training_sample(resources->model, resources->tokenizer,
-                              resources->sample_rng, step);
-        restart_training_timer(state);
-    }
+    if (step % SAMPLE_INTERVAL != 0)
+        return;
+
+    print_training_sample(resources->model, resources->tokenizer,
+                          resources->sample_rng, step);
+    restart_training_timer(state);
 }
 
 static void save_training_if_due(TrainingResources *resources,
                                  TrainingObservationState *state,
                                  const TrainOptions *options, int step)
 {
-    if (step % CHECKPOINT_INTERVAL == 0 || step == options->steps) {
-        ModelSaveResult saved =
-            model_save_durable(resources->model, resources->tokenizer,
-                               options->out_path);
+    if (step % CHECKPOINT_INTERVAL != 0 && step != options->steps)
+        return;
 
-        if (saved == MODEL_SAVE_NOT_COMMITTED)
-            die("cannot write checkpoint %s", options->out_path);
-        if (saved == MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED)
-            die("checkpoint %s was committed, but directory finalization "
-                "failed; durability is unconfirmed", options->out_path);
-        restart_training_timer(state);
-    }
+    ModelSaveResult saved =
+        model_save_durable(resources->model, resources->tokenizer,
+                           options->out_path);
+
+    if (saved == MODEL_SAVE_NOT_COMMITTED)
+        die("cannot write checkpoint %s", options->out_path);
+    if (saved == MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED)
+        die("checkpoint %s was committed, but directory finalization "
+            "failed; durability is unconfirmed", options->out_path);
+    restart_training_timer(state);
 }
 
 static void train_loop(TrainingResources *resources,
@@ -603,7 +717,7 @@ static void train_loop(TrainingResources *resources,
     TrainingObservationState observation =
         prepare_training_observation(resources, options);
 
-    for (int step = 1; step <= options->steps; step++) {
+    for (int step = FIRST_TRAINING_STEP; step <= options->steps; step++) {
         float loss =
             run_training_step(resources, &step_state, options, step);
 
@@ -629,7 +743,7 @@ static int run_train(TrainOptions options)
     return EXIT_SUCCESS;
 }
 
-static int parse_train(int argc, char **argv)
+static TrainOptions default_train_options(void)
 {
     TrainOptions options = {
         .data_path     = NULL,
@@ -647,41 +761,86 @@ static int parse_train(int argc, char **argv)
         .learning_rate = DEFAULT_LEARNING_RATE,
         .seed          = DEFAULT_SEED,
     };
-    int letter;
 
-    opterr = 0;
-    while ((letter = getopt_long(argc, argv, "", TRAIN_FLAGS, NULL)) != -1) {
-        switch (letter) {
-        case 'd': options.data_path = optarg;                                                          break;
-        case 'v': options.validation_path = optarg;                                                    break;
-        case 'o': options.out_path  = optarg;                                                          break;
-        case 's': options.steps = parse_int(optarg, 1, MAX_STEP_COUNT, "--steps");                     break;
-        case 'l': options.cfg.layer_count = parse_int(optarg, 1, MODEL_MAX_LAYER_COUNT, "--layers");   break;
-        case 'h': options.cfg.head_count = parse_int(optarg, 1, MODEL_MAX_HEAD_COUNT, "--heads");      break;
-        case 'w': options.cfg.d_model = parse_int(optarg, 1, MODEL_MAX_D_MODEL, "--width");            break;
-        case 'k': options.cfg.block_size = parse_int(optarg, 1, MODEL_MAX_BLOCK_SIZE, "--block");      break;
-        case 'b': options.cfg.batch_size = parse_int(optarg, 1, MODEL_MAX_TOKENS_PER_PASS, "--batch"); break;
-        case 'r': options.learning_rate = parse_positive(optarg, "--lr");                              break;
-        case 'x': options.seed = parse_seed(optarg);                                                   break;
-        default:  invalid_option("train", argc, argv);
-        }
+    return options;
+}
+
+static void parse_train_option(TrainOptions *options, int letter,
+                               int argc, char **argv)
+{
+    switch (letter) {
+    case 'd':
+        options->data_path = optarg;
+        return;
+    case 'v':
+        options->validation_path = optarg;
+        return;
+    case 'o':
+        options->out_path = optarg;
+        return;
+    case 's':
+        options->steps = parse_int(optarg, MINIMUM_OPTION_VALUE,
+                                   MAX_STEP_COUNT, "--steps");
+        return;
+    case 'l':
+        options->cfg.layer_count =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_LAYER_COUNT, "--layers");
+        return;
+    case 'h':
+        options->cfg.head_count =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_HEAD_COUNT, "--heads");
+        return;
+    case 'w':
+        options->cfg.d_model =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_D_MODEL, "--width");
+        return;
+    case 'k':
+        options->cfg.block_size =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_BLOCK_SIZE, "--block");
+        return;
+    case 'b':
+        options->cfg.batch_size =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_TOKENS_PER_PASS, "--batch");
+        return;
+    case 'r':
+        options->learning_rate = parse_positive(optarg, "--lr");
+        return;
+    case 'x':
+        options->seed = parse_seed(optarg);
+        return;
+    default:
+        invalid_option("train", argc, argv);
     }
-    if (options.data_path == NULL)
+}
+
+static void validate_train_options(const TrainOptions *options,
+                                   int argc, char **argv)
+{
+    if (options->data_path == NULL)
         usage_error("train requires --data FILE");
     if (optind != argc)
         usage_error("train: unexpected argument '%s'", argv[optind]);
+}
+
+static int parse_train(int argc, char **argv)
+{
+    TrainOptions options = default_train_options();
+    int letter;
+
+    opterr = 0;
+    while ((letter = getopt_long(argc, argv, "", TRAIN_FLAGS, NULL)) != -1)
+        parse_train_option(&options, letter, argc, argv);
+
+    validate_train_options(&options, argc, argv);
     return run_train(options);
 }
 
 /* -------- sample -------- */
-
-typedef struct {
-    const char *model_path;
-    const char *prompt;
-    int         length;
-    float       temperature;
-    unsigned long long seed;
-} SampleOptions;
 
 static const struct option SAMPLE_FLAGS[] = {
     { "model",       required_argument, NULL, 'm' },
@@ -702,18 +861,22 @@ static int run_sample(SampleOptions options)
     print_architecture(stderr, m);
 
     size_t prompt_length = strlen(options.prompt);
-    int   *ids           = emalloc((1 + prompt_length + (size_t)options.length) * sizeof *ids);
+    int *ids = emalloc((SAMPLE_SEED_TOKENS + prompt_length
+                        + (size_t)options.length) * sizeof *ids);
 
     /* A newline before the prompt puts the model at start-of-line, the
      * state every line of its corpus began from. */
     ids[0] = newline_id(tk);
 
-    int  known = 1 + (int)tokenizer_encode(tk, ids + 1, options.prompt, prompt_length);
+    int known = SAMPLE_SEED_TOKENS
+              + (int)tokenizer_encode(tk, ids + SAMPLE_SEED_TOKENS,
+                                      options.prompt, prompt_length);
     int  total = known + options.length;
     Rng *rng   = rng_new(options.seed);
 
     model_sample(m, rng, ids, known, total, options.temperature);
-    print_text(tk, ids + 1, total - 1);   /* everything but the seed newline */
+    print_text(tk, ids + SAMPLE_SEED_TOKENS,
+               total - SAMPLE_SEED_TOKENS);
 
     rng_free(rng);
     free(ids);
@@ -722,7 +885,7 @@ static int run_sample(SampleOptions options)
     return EXIT_SUCCESS;
 }
 
-static int parse_sample(int argc, char **argv)
+static SampleOptions default_sample_options(void)
 {
     SampleOptions options = {
         .model_path  = NULL,
@@ -731,23 +894,54 @@ static int parse_sample(int argc, char **argv)
         .temperature = DEFAULT_TEMPERATURE,
         .seed        = DEFAULT_SEED,
     };
+
+    return options;
+}
+
+static void parse_sample_option(SampleOptions *options, int letter,
+                                int argc, char **argv)
+{
+    switch (letter) {
+    case 'm':
+        options->model_path = optarg;
+        return;
+    case 'p':
+        options->prompt = optarg;
+        return;
+    case 'n':
+        options->length = parse_int(optarg, MINIMUM_OPTION_VALUE,
+                                    MAX_TAIL_LENGTH, "--length");
+        return;
+    case 't':
+        options->temperature = parse_positive(optarg, "--temperature");
+        return;
+    case 'x':
+        options->seed = parse_seed(optarg);
+        return;
+    default:
+        invalid_option("sample", argc, argv);
+    }
+}
+
+static void validate_sample_options(const SampleOptions *options,
+                                    int argc, char **argv)
+{
+    if (optind != argc)
+        usage_error("sample: unexpected argument '%s'", argv[optind]);
+    if (options->model_path == NULL)
+        usage_error("sample requires --model FILE");
+}
+
+static int parse_sample(int argc, char **argv)
+{
+    SampleOptions options = default_sample_options();
     int letter;
 
     opterr = 0;
-    while ((letter = getopt_long(argc, argv, "", SAMPLE_FLAGS, NULL)) != -1) {
-        switch (letter) {
-        case 'm': options.model_path = optarg;                                        break;
-        case 'p': options.prompt     = optarg;                                        break;
-        case 'n': options.length = parse_int(optarg, 1, MAX_TAIL_LENGTH, "--length"); break;
-        case 't': options.temperature = parse_positive(optarg, "--temperature");      break;
-        case 'x': options.seed = parse_seed(optarg);                                  break;
-        default:  invalid_option("sample", argc, argv);
-        }
-    }
-    if (optind != argc)
-        usage_error("sample: unexpected argument '%s'", argv[optind]);
-    if (options.model_path == NULL)
-        usage_error("sample requires --model FILE");
+    while ((letter = getopt_long(argc, argv, "", SAMPLE_FLAGS, NULL)) != -1)
+        parse_sample_option(&options, letter, argc, argv);
+
+    validate_sample_options(&options, argc, argv);
     return run_sample(options);
 }
 
@@ -758,32 +952,59 @@ static int parse_sample(int argc, char **argv)
 static void choose_thread_count(void)
 {
 #ifdef _OPENMP
-    int half = omp_get_num_procs() / 2;
+    int half =
+        omp_get_num_procs() / LOGICAL_THREADS_PER_PHYSICAL_CORE;
 
     if (getenv("OMP_NUM_THREADS") == NULL && half > 0)
         omp_set_num_threads(half);
 #endif
 }
 
-int main(int argc, char **argv)
+static void configure_runtime(void)
 {
     /* Training narrates as it goes; line-buffering keeps the story
      * streaming even when stdout is a file being tailed. */
     setvbuf(stdout, NULL, _IOLBF, 0);
     choose_thread_count();
-    if (argc == 2 && strcmp(argv[1], "--help") == 0) {
+}
+
+static int is_standalone_argument(int argc, char **argv,
+                                  const char *expected)
+{
+    return argc == TOP_LEVEL_COMMAND_ARGUMENTS
+        && strcmp(argv[COMMAND_ARGUMENT_INDEX], expected) == 0;
+}
+
+static int dispatch_subcommand(int argc, char **argv)
+{
+    const char *subcommand      = argv[COMMAND_ARGUMENT_INDEX];
+    int         subcommand_argc = argc - COMMAND_ARGUMENT_INDEX;
+    char      **subcommand_argv = argv + COMMAND_ARGUMENT_INDEX;
+
+    if (strcmp(subcommand, "train") == 0)
+        return parse_train(subcommand_argc, subcommand_argv);
+    if (strcmp(subcommand, "sample") == 0)
+        return parse_sample(subcommand_argc, subcommand_argv);
+    usage_error("unknown command '%s'", subcommand);
+}
+
+static int dispatch_command_line(int argc, char **argv)
+{
+    if (is_standalone_argument(argc, argv, "--help")) {
         print_usage(stdout);
         return EXIT_SUCCESS;
     }
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+    if (is_standalone_argument(argc, argv, "--version")) {
         printf("tiny-agenc %s\n", TINY_AGENC_VERSION);
         return EXIT_SUCCESS;
     }
-    if (argc < 2)
+    if (argc < TOP_LEVEL_COMMAND_ARGUMENTS)
         usage_error(NULL);
-    if (strcmp(argv[1], "train") == 0)
-        return parse_train(argc - 1, argv + 1);
-    if (strcmp(argv[1], "sample") == 0)
-        return parse_sample(argc - 1, argv + 1);
-    usage_error("unknown command '%s'", argv[1]);
+    return dispatch_subcommand(argc, argv);
+}
+
+int main(int argc, char **argv)
+{
+    configure_runtime();
+    return dispatch_command_line(argc, argv);
 }

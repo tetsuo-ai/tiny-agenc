@@ -5,6 +5,9 @@
 
 static int failures;
 
+static void expect(int condition, const char *message);
+int main(void);
+
 static void expect(int condition, const char *message)
 {
     if (condition)

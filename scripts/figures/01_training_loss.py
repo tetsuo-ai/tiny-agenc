@@ -85,16 +85,8 @@ def plot_y(loss):
     return TOP + fraction * PLOT_HEIGHT
 
 
-def main():
-    reports = read_reports()
-    points = [(plot_x(step), plot_y(loss)) for step, loss in reports]
-
-    assert all(LEFT <= x <= WIDTH - RIGHT for x, _ in points)
-    assert all(TOP <= y <= BOTTOM for _, y in points)
-
-    point_string = " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
-
-    svg = [
+def start_svg():
+    return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
@@ -169,6 +161,8 @@ def main():
         ),
     ]
 
+
+def draw_axes(svg):
     for loss in (0.5, 1.0, 2.0, 3.0, 4.0, 4.5):
         y = plot_y(loss)
         svg.append(line(LEFT, y, WIDTH - RIGHT, y, "grid"))
@@ -196,16 +190,22 @@ def main():
                 "axis-label",
                 "start",
             ),
-            f'  <polyline points="{point_string}" class="curve"/>',
         )
     )
 
+
+def draw_loss_curve(svg, points):
+    point_string = " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+
+    svg.append(f'  <polyline points="{point_string}" class="curve"/>')
     for x, y in points:
         svg.append(
             f'  <circle cx="{x:.2f}" cy="{y:.2f}" r="2.6" '
             f'fill="{BLUE}" stroke="{PANEL}" stroke-width="0.8"/>'
         )
 
+
+def draw_callouts(svg, points):
     first_x, first_y = points[0]
     svg.append(line(first_x + 4, first_y + 3, 116, 164, "callout-line"))
     svg.append(rect(116, 146, 190, 64, PANEL, GREEN, 8))
@@ -218,6 +218,8 @@ def main():
     svg.append(text(684, 379, "step 5,000 report", "callout-title", "start"))
     svg.append(text(684, 403, "final loss 0.7668", "callout-detail", "start"))
 
+
+def write_svg(svg):
     svg.append(
         text(
             44,
@@ -232,6 +234,20 @@ def main():
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as output:
         output.write("\n".join(svg) + "\n")
+
+
+def main():
+    reports = read_reports()
+    points = [(plot_x(step), plot_y(loss)) for step, loss in reports]
+
+    assert all(LEFT <= x <= WIDTH - RIGHT for x, _ in points)
+    assert all(TOP <= y <= BOTTOM for _, y in points)
+
+    svg = start_svg()
+    draw_axes(svg)
+    draw_loss_curve(svg, points)
+    draw_callouts(svg, points)
+    write_svg(svg)
 
 
 if __name__ == "__main__":

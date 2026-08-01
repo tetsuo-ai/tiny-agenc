@@ -251,7 +251,11 @@ helpers in `model_memory.c` are:
 ```c
 static ArenaCursor arena_cursor(float *base, size_t capacity)
 {
-    ArenaCursor cursor = { base, 0, capacity };
+    ArenaCursor cursor = {
+        .base = base,
+        .next = 0,
+        .capacity = capacity,
+    };
 
     return cursor;
 }
@@ -765,9 +769,11 @@ static int vector_parameter_floats(ModelConfig cfg, size_t *result)
     size_t width      = (size_t)cfg.d_model;
     size_t block_vectors;
 
-    return checked_multiply((size_t)cfg.layer_count, 4 * width,
+    return checked_multiply((size_t)cfg.layer_count,
+                            NORM_PARAMETER_VECTORS_PER_BLOCK * width,
                             &block_vectors)
-        && checked_add(block_vectors, 2 * width, result);
+        && checked_add(block_vectors,
+                       FINAL_NORM_PARAMETER_VECTORS * width, result);
 }
 
 static int matrix_parameter_floats(ModelConfig cfg, size_t *result)
@@ -776,7 +782,7 @@ static int matrix_parameter_floats(ModelConfig cfg, size_t *result)
 
     return checked_multiply((size_t)cfg.d_model, (size_t)cfg.d_model,
                             &square)
-        && checked_multiply(square, 12, &square)
+        && checked_multiply(square, MATRIX_WIDTHS_PER_BLOCK, &square)
         && checked_multiply(square, (size_t)cfg.layer_count, result);
 }
 
@@ -804,10 +810,11 @@ layernorm vectors. `matrix_parameter_floats` computes `12*L*C*C` for
 the block matrices. The last helper obtains those three counts, then
 adds them.
 
-That geometry predicate already caps `C`, so the local `4 * width`
-and `2 * width` scales fit before reaching a helper. Every growing
-product and total is checked. `*result` is written only after the
-complete count succeeds.
+The file-level constants name the four block norm vectors, two final
+norm vectors, and twelve matrix widths counted by these expressions.
+That geometry predicate already caps `C`, so their local scales fit
+before reaching a helper. Every growing product and total is checked.
+`*result` is written only after the complete count succeeds.
 
 One exact wrapper exposes that checked count to later model code:
 
@@ -888,10 +895,13 @@ static int measure_block_float_counts(ShapeCounts shape,
 {
     BlockFloatCounts counts = {0};
 
-    if (!checked_scaled_add(&counts.values, shape.channels, 18)
+    if (!checked_scaled_add(&counts.values, shape.channels,
+                            BLOCK_CHANNEL_WIDTHS)
         || !checked_add(counts.values, shape.scores, &counts.values)
-        || !checked_scaled_add(&counts.values, shape.rows, 4)
-        || !checked_scaled_add(&counts.gradients, shape.channels, 18)
+        || !checked_scaled_add(&counts.values, shape.rows,
+                               BLOCK_STATISTIC_BUFFERS)
+        || !checked_scaled_add(&counts.gradients, shape.channels,
+                               BLOCK_CHANNEL_WIDTHS)
         || !checked_add(counts.gradients, shape.scores,
                         &counts.gradients))
         return 0;
@@ -900,6 +910,7 @@ static int measure_block_float_counts(ShapeCounts shape,
 }
 ```
 
+`BLOCK_CHANNEL_WIDTHS` is `18`, and `BLOCK_STATISTIC_BUFFERS` is `4`.
 The value side becomes `18N + S + 4R`. The gradient side becomes
 `18N + S`. Starting the local record at zero makes each
 `checked_scaled_add` a direct term in those formulas.
@@ -914,26 +925,31 @@ static int measure_model_float_counts(ModelConfig cfg, ShapeCounts shape,
     ModelFloatCounts counts = {0};
 
     if (!measure_parameter_floats(cfg, &counts.parameters)
-        || !checked_scaled_add(&counts.values, shape.channels, 2)
+        || !checked_scaled_add(&counts.values, shape.channels,
+                               MODEL_STREAM_BUFFERS)
         || !checked_scaled_add(&counts.values, block.values,
                                (size_t)cfg.layer_count)
-        || !checked_scaled_add(&counts.values, shape.rows, 2)
-        || !checked_scaled_add(&counts.values, shape.logits, 2)
-        || !checked_scaled_add(&counts.gradients, shape.channels, 2)
+        || !checked_scaled_add(&counts.values, shape.rows,
+                               MODEL_STATISTIC_BUFFERS)
+        || !checked_scaled_add(&counts.values, shape.logits,
+                               MODEL_LOGIT_VALUE_BUFFERS)
+        || !checked_scaled_add(&counts.gradients, shape.channels,
+                               MODEL_STREAM_BUFFERS)
         || !checked_scaled_add(&counts.gradients, block.gradients,
                                (size_t)cfg.layer_count)
-        || !checked_add(counts.gradients, shape.logits,
-                        &counts.gradients))
+        || !checked_scaled_add(&counts.gradients, shape.logits,
+                               MODEL_LOGIT_GRADIENT_BUFFERS))
         return 0;
     *result = counts;
     return 1;
 }
 ```
 
-The value route computes `2N + L*block.values + 2R + 2Q`. The
-gradient route computes `2N + L*block.gradients + Q`. The same stage
-also obtains `P`. Again, a failed operation leaves its caller's result
-untouched.
+The named buffer counts are two model streams, two statistic buffers,
+two logit-value buffers, and one logit-gradient buffer. The value route
+computes `2N + L*block.values + 2R + 2Q`. The gradient route computes
+`2N + L*block.gradients + Q`. The same stage also obtains `P`. Again,
+a failed operation leaves its caller's result untouched.
 
 Only the next stage converts complete float counts to bytes. These
 exact remaining stages from `model.c` use the already-shown checked
@@ -955,13 +971,15 @@ static int build_memory_report(ShapeCounts shape, ModelFloatCounts floats,
 {
     ModelMemory memory;
 
-    if (!checked_multiply(floats.parameters, 4 * sizeof(float),
+    if (!checked_multiply(floats.parameters,
+                          PARAMETER_STORAGE_BUFFERS * sizeof(float),
                           &memory.parameter_bytes)
         || !checked_multiply(floats.values, sizeof(float),
                              &memory.activation_bytes)
         || !checked_multiply(floats.gradients, sizeof(float),
                              &memory.gradient_bytes)
-        || !checked_multiply(shape.rows, 2 * sizeof(int),
+        || !checked_multiply(shape.rows,
+                             TOKEN_CACHE_BUFFERS * sizeof(int),
                              &memory.token_bytes)
         || !total_memory_bytes(&memory))
         return 0;
@@ -993,6 +1011,7 @@ int model_memory_requirements(ModelConfig cfg, ModelMemory *memory)
 }
 ```
 
+`PARAMETER_STORAGE_BUFFERS` is four and `TOKEN_CACHE_BUFFERS` is two.
 `build_memory_report` multiplies `P` by four float buffers, converts
 `A` and `G` to float bytes, converts `R` to two integer caches, and
 asks `total_memory_bytes` to add the four families. That helper keeps
@@ -1035,8 +1054,8 @@ static int memory_total_matches_components(ModelMemory memory)
 static int memory_report_matches_layout(const Model *m, ModelMemory memory,
                                         ArenaLayout layout)
 {
-    size_t parameter_unit = 4 * sizeof(float);
-    size_t token_unit = 2 * sizeof(int);
+    size_t parameter_unit = PARAMETER_STORAGE_BUFFERS * sizeof(float);
+    size_t token_unit = TOKEN_CACHE_BUFFERS * sizeof(int);
     size_t max_tokens =
         (size_t)m->cfg.batch_size * (size_t)m->cfg.block_size;
 

@@ -11,6 +11,8 @@ struct Dataset {
     size_t token_count;
 };
 
+enum { NEXT_TOKEN_OFFSET = 1 };
+
 static const size_t DATASET_POLICY_MAX_BYTES =
     (size_t)256 * (size_t)1024 * (size_t)1024;
 
@@ -49,16 +51,20 @@ void dataset_batch(const Dataset *ds, Rng *rng, int *inputs, int *targets,
                    int batch_size, int block_size)
 {
     /* A run starting at s uses tokens s .. s+block_size as input and
-     * target, so the last legal start is token_count - block_size - 1. */
-    assert(ds->token_count >= (size_t)block_size + 1);
+     * target, so the final answer determines the last legal start. */
+    assert(ds->token_count
+           >= (size_t)block_size + NEXT_TOKEN_OFFSET);
 
-    int last_start = (int)(ds->token_count - (size_t)block_size - 1);
+    int last_start =
+        (int)(ds->token_count - (size_t)block_size - NEXT_TOKEN_OFFSET);
 
     for (int row = 0; row < batch_size; row++) {
-        const int *run = ds->tokens + rng_below(rng, last_start + 1);
+        const int *run =
+            ds->tokens + rng_below(rng, last_start + NEXT_TOKEN_OFFSET);
 
         memcpy(inputs + row * block_size, run, (size_t)block_size * sizeof *inputs);
-        memcpy(targets + row * block_size, run + 1, (size_t)block_size * sizeof *targets);
+        memcpy(targets + row * block_size, run + NEXT_TOKEN_OFFSET,
+               (size_t)block_size * sizeof *targets);
     }
 }
 

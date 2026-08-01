@@ -4,6 +4,9 @@
 #include "model_internal.h"
 
 static Mat block_forward(const Model *m, Block *b, Mat stream,
+                         int batch, int time);
+
+static Mat block_forward(const Model *m, Block *b, Mat stream,
                          int batch, int time)
 {
     BlockTensors a =

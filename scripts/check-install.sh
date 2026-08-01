@@ -14,6 +14,10 @@ fail() {
     exit 1
 }
 
+cleanup() {
+    rm -rf -- "$temporary_dir"
+}
+
 [[ -x $EXECUTABLE ]] || fail "missing executable: $EXECUTABLE"
 [[ -r $MODEL ]] || fail "missing bundled checkpoint: $MODEL"
 
@@ -41,9 +45,6 @@ checkpoint_hash=$(sha256sum "$MODEL" | awk '{print $1}')
     fail "installed checkpoint hash is $checkpoint_hash"
 
 temporary_dir=$(mktemp -d)
-cleanup() {
-    rm -rf -- "$temporary_dir"
-}
 trap cleanup EXIT HUP INT TERM
 
 "$EXECUTABLE" sample --model "$MODEL" --prompt 'RAZR:' \

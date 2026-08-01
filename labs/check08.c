@@ -12,6 +12,23 @@
 
 static int checks;
 static int failures;
+static const uint32_t FLOAT_EXPONENT_MASK = 0x7F800000u;
+static const uint32_t QUIET_NAN_BITS = 0x7FC00000u;
+
+static void expect(int condition, const char *message);
+static int close_float(float actual, float expected, float tolerance);
+static int finite_float(float value);
+static AdamW adamw_test_recipe(float learning_rate);
+static void run_reference(Param *p, AdamW opt, int steps, double decay,
+                          const char *message);
+static void check_adamw(void);
+static void check_gradient_tools(void);
+static void check_parameter_io(void);
+static void check_shape_rejections(void);
+static void check_recipe_and_nonfinite_rejections(void);
+static void check_overflow_rejection(void);
+static void check_rejection_contracts(void);
+int main(void);
 
 static void expect(int condition, const char *message)
 {
@@ -32,7 +49,7 @@ static int finite_float(float value)
     uint32_t bits;
 
     memcpy(&bits, &value, sizeof bits);
-    return (bits & 0x7F800000u) != 0x7F800000u;
+    return (bits & FLOAT_EXPONENT_MASK) != FLOAT_EXPONENT_MASK;
 }
 
 static void run_reference(Param *p, AdamW opt, int steps, double decay,
@@ -88,15 +105,22 @@ static void run_reference(Param *p, AdamW opt, int steps, double decay,
     free(shadow);
 }
 
-static void check_adamw(void)
+static AdamW adamw_test_recipe(float learning_rate)
 {
-    AdamW opt = {
-        .learning_rate = 0.1f,
+    AdamW optimizer = {
+        .learning_rate = learning_rate,
         .beta1         = 0.9f,
         .beta2         = 0.999f,
         .epsilon       = 1e-8f,
         .weight_decay  = 0.01f,
     };
+
+    return optimizer;
+}
+
+static void check_adamw(void)
+{
+    AdamW opt = adamw_test_recipe(0.1f);
     Param *matrix = param_new_constant(2, 3, 0.75f);
     Param *vector = param_new_constant(1, 3, 0.75f);
 
@@ -180,9 +204,8 @@ static void check_parameter_io(void)
         fclose(stream);
     }
 
-    uint32_t nan_bits = 0x7FC00000u;
-
-    memcpy(&original_values.vals[0], &nan_bits, sizeof nan_bits);
+    memcpy(&original_values.vals[0], &QUIET_NAN_BITS,
+           sizeof QUIET_NAN_BITS);
     stream = tmpfile();
     expect(stream != NULL, "the non-finite parameter fixture opens");
     if (stream != NULL) {
@@ -193,7 +216,7 @@ static void check_parameter_io(void)
     param_free(original);
 }
 
-static void check_rejection_contracts(void)
+static void check_shape_rejections(void)
 {
     Rng *rng = rng_new(1);
 
@@ -202,7 +225,10 @@ static void check_rejection_contracts(void)
     expect(param_new_gaussian(2, 0, 0.02f, rng) == NULL,
            "a non-positive Gaussian shape is rejected");
     rng_free(rng);
+}
 
+static void check_recipe_and_nonfinite_rejections(void)
+{
     Param *tested = param_new_constant(1, 2, 0.5f);
     Param *control = param_new_constant(1, 2, 0.5f);
     Mat tested_gradient = param_gradient(tested);
@@ -211,13 +237,7 @@ static void check_rejection_contracts(void)
     tested_gradient.vals[0] = control_gradient.vals[0] = 0.25f;
     tested_gradient.vals[1] = control_gradient.vals[1] = -0.5f;
 
-    AdamW valid = {
-        .learning_rate = 0.01f,
-        .beta1         = 0.9f,
-        .beta2         = 0.999f,
-        .epsilon       = 1e-8f,
-        .weight_decay  = 0.01f,
-    };
+    AdamW valid = adamw_test_recipe(0.01f);
     AdamW invalid = valid;
     invalid.epsilon = 0.0f;
 
@@ -234,7 +254,7 @@ static void check_rejection_contracts(void)
                   mat_size(tested_values) * sizeof *tested_values.vals) == 0,
            "a rejected recipe leaves values and optimizer history unchanged");
 
-    uint32_t infinity_bits = 0x7F800000u;
+    uint32_t infinity_bits = FLOAT_EXPONENT_MASK;
 
     memcpy(&tested_gradient.vals[0], &infinity_bits, sizeof infinity_bits);
     expect(!param_gradient_is_finite(tested),
@@ -242,12 +262,19 @@ static void check_rejection_contracts(void)
     expect(param_adamw_step(tested, valid, 2) != 0,
            "AdamW rejects a non-finite gradient");
 
+    param_free(control);
+    param_free(tested);
+}
+
+static void check_overflow_rejection(void)
+{
     Param *unsafe = param_new_constant(2, 2, 0.5f);
     Param *untouched = param_new_constant(2, 2, 0.5f);
     Mat unsafe_values = param_values(unsafe);
     Mat untouched_values = param_values(untouched);
     Mat unsafe_gradient = param_gradient(unsafe);
     Mat untouched_gradient = param_gradient(untouched);
+    AdamW valid = adamw_test_recipe(0.01f);
 
     unsafe_values.vals[3] = FLT_MAX / 4.0f;
     untouched_values.vals[3] = FLT_MAX / 4.0f;
@@ -276,8 +303,13 @@ static void check_rejection_contracts(void)
 
     param_free(untouched);
     param_free(unsafe);
-    param_free(control);
-    param_free(tested);
+}
+
+static void check_rejection_contracts(void)
+{
+    check_shape_rejections();
+    check_recipe_and_nonfinite_rejections();
+    check_overflow_rejection();
 }
 
 int main(void)

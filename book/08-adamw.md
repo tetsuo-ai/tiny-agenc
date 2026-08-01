@@ -461,12 +461,19 @@ struct Param {
     float *second_moment;   /* running average of squared gradients */
 };
 
-enum { PARAM_BUFFERS = 4 };   /* values, gradient, and two moments */
+enum {
+    PARAM_VALUE_BUFFER,
+    PARAM_GRADIENT_BUFFER,
+    PARAM_FIRST_MOMENT_BUFFER,
+    PARAM_SECOND_MOMENT_BUFFER,
+    PARAM_BUFFER_COUNT,
+};
 ```
 
 `values` is a `Mat` because forward code needs its rows and columns.
 The other three regions have the same number of entries, so pointers
-are enough inside this private module.
+are enough inside this private module. The enum names each region's
+offset multiplier; its final member counts the four buffers.
 
 Here is the complete private constructor from
 [`param.c`](../src/param.c):
@@ -480,17 +487,17 @@ static Param *param_new(int rows, int cols)
 
     size_t count = (size_t)rows * (size_t)cols;
 
-    if (count > SIZE_MAX / PARAM_BUFFERS
-        || PARAM_BUFFERS * count > SIZE_MAX / sizeof(float))
+    if (count > SIZE_MAX / PARAM_BUFFER_COUNT
+        || PARAM_BUFFER_COUNT * count > SIZE_MAX / sizeof(float))
         return NULL;
 
-    Param  *p     = emalloc(sizeof *p);
-    float  *store = ecalloc(PARAM_BUFFERS * count, sizeof *store);
+    Param *p = emalloc(sizeof *p);
+    float *store = ecalloc(PARAM_BUFFER_COUNT * count, sizeof *store);
 
-    p->values        = mat_make(store, rows, cols);
-    p->gradient      = store + count;
-    p->first_moment  = store + 2 * count;
-    p->second_moment = store + 3 * count;
+    p->values = mat_make(store + PARAM_VALUE_BUFFER * count, rows, cols);
+    p->gradient = store + PARAM_GRADIENT_BUFFER * count;
+    p->first_moment = store + PARAM_FIRST_MOMENT_BUFFER * count;
+    p->second_moment = store + PARAM_SECOND_MOMENT_BUFFER * count;
     return p;
 }
 ```
@@ -540,15 +547,16 @@ decay policy:
 ```c
 /* Shapes with more than one row and column get weight decay; gains,
  * biases, and other vectors do not. */
-static int is_matrix(const Param *p)
+static int parameter_has_matrix_shape(const Param *p)
 {
     return p->values.rows > 1 && p->values.cols > 1;
 }
 ```
 
 The helper reads the stored row and column counts and returns true only
-when both comparisons succeed. Its name records the project's policy;
-it does not redefine Chapter 1's mathematical meaning of matrix.
+when both comparisons succeed. Its name records that this is a shape
+test used by the project's decay policy; it does not redefine Chapter
+1's mathematical meaning of matrix.
 
 ## Check the recipe before changing history
 
@@ -578,14 +586,15 @@ static int finite_float(float value)
     uint32_t bits;
 
     memcpy(&bits, &value, sizeof bits);
-    return (bits & 0x7F800000u) != 0x7F800000u;
+    return (bits & FLOAT_EXPONENT_MASK) != FLOAT_EXPONENT_MASK;
 }
 ```
 
 `memcpy` copies the float's 32 stored bits into the fixed-width
 unsigned integer without asking C to reinterpret one pointer type as
-another. The hexadecimal mask `0x7F800000u` selects all eight exponent
-bits in the float representation supported by this program. An
+another. The file-level `FLOAT_EXPONENT_MASK` is `0x7F800000u`; it
+selects all eight exponent bits in the float representation supported
+by this program. An
 all-ones exponent encodes either an infinity or `NaN`. Bitwise `&`
 keeps those exponent bits, and the comparison returns false when they
 are all one.
@@ -645,13 +654,14 @@ static int adamw_prepare(PreparedAdamW *prepared, const Param *p,
 
     prepared->opt = opt;
     prepared->count = mat_size(p->values);
-    prepared->decay = is_matrix(p) ? opt.weight_decay : 0.0f;
+    prepared->decay =
+        parameter_has_matrix_shape(p) ? opt.weight_decay : 0.0f;
     prepared->correction1 = 1.0f - powf(opt.beta1, (float)step);
     prepared->correction2 = 1.0f - powf(opt.beta2, (float)step);
 
     if (!adamw_corrections_valid(prepared))
         return 0;
-    prepared->safe = (double)FLT_MAX / 4.0;
+    prepared->safe = (double)FLT_MAX / ADAMW_SAFE_RANGE_DIVISOR;
     prepared->inverse_correction1 = 1.0 / (double)prepared->correction1;
     prepared->inverse_correction2 = 1.0 / (double)prepared->correction2;
     prepared->inverse_epsilon = 1.0 / (double)prepared->opt.epsilon;
@@ -663,7 +673,9 @@ The first guard checks the public recipe before filling the record.
 The next five assignments copy the recipe, count the entries, choose
 the decay, and compute both corrections. `powf(base, exponent)` is the
 float version of raising a number to a power. The cast supplies `step`
-in the float type that `powf` expects.
+in the float type that `powf` expects. The file-level
+`ADAMW_SAFE_RANGE_DIVISOR` names the factor of four used to leave room
+below `FLT_MAX`.
 
 The correction helper accepts two finite positive values:
 
@@ -731,7 +743,8 @@ static int adamw_update_bounds_valid(const Param *p,
     double change_bound =
         (double)step->opt.learning_rate * direction_bound;
 
-    return (double)step->opt.epsilon <= step->safe / 2.0
+    return (double)step->opt.epsilon
+               <= step->safe / ADAMW_EPSILON_RANGE_DIVISOR
         && variance_bound <= step->safe
         && smoothed_bound <= step->safe
         && ratio_bound <= step->safe
@@ -746,8 +759,10 @@ Each local variable bounds the next operation in source order:
 corrected variance, corrected first moment, division by epsilon,
 decay, their sum, and the learning-rate-scaled change. The final test
 also includes the old value. These double calculations prove that the
-original float update will stay finite. They do not replace that
-update with double arithmetic.
+original float update will stay finite. The file-level
+`ADAMW_EPSILON_RANGE_DIVISOR` names the factor of two in the epsilon
+bound. These calculations do not replace that update with double
+arithmetic.
 
 The complete read-only scan is now a short coordinator:
 
@@ -938,9 +953,11 @@ int param_write(const Param *p, FILE *stream)
 {
     size_t count = mat_size(p->values);
 
-    if (!values_are_finite(p))
+    if (!parameter_values_are_finite(p))
         return -1;
-    return fwrite(p->values.vals, sizeof *p->values.vals, count, stream) == count ? 0 : -1;
+    return fwrite(p->values.vals, sizeof *p->values.vals, count, stream)
+               == count
+        ? 0 : -1;
 }
 
 int param_read(Param *p, FILE *stream)
@@ -949,7 +966,7 @@ int param_read(Param *p, FILE *stream)
 
     if (fread(p->values.vals, sizeof *p->values.vals, count, stream) != count)
         return -1;
-    return values_are_finite(p) ? 0 : -1;
+    return parameter_values_are_finite(p) ? 0 : -1;
 }
 ```
 

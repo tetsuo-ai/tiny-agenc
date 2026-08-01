@@ -159,44 +159,99 @@ arrays elsewhere: advancing a typed pointer moves by one object of its
 pointed-to type.
 
 The complete source signature is `int main(int argc, char **argv)`.
-Here is the dispatch portion of [`main`](../src/main.c). It begins after
-two process-wide setup statements whose needs are constructed later:
+Making that entry point perform setup and inspect every argument would
+hide its two jobs in a list of conditions. Its complete body instead
+names those jobs:
 
 ```c
-if (argc == 2 && strcmp(argv[1], "--help") == 0) {
-    print_usage(stdout);
-    return EXIT_SUCCESS;
+int main(int argc, char **argv)
+{
+    configure_runtime();
+    return dispatch_command_line(argc, argv);
 }
-if (argc == 2 && strcmp(argv[1], "--version") == 0) {
-    printf("tiny-agenc %s\n", TINY_AGENC_VERSION);
-    return EXIT_SUCCESS;
-}
-if (argc < 2)
-    usage_error(NULL);
-if (strcmp(argv[1], "train") == 0)
-    return parse_train(argc - 1, argv + 1);
-if (strcmp(argv[1], "sample") == 0)
-    return parse_sample(argc - 1, argv + 1);
-usage_error("unknown command '%s'", argv[1]);
 ```
 
-The help and version checks require `argc == 2`, not merely
-`argc >= 2`. Therefore `tiny-agenc --help extra` cannot discard the
-extra word and report success. `strcmp(a, b) == 0` means the two strings
-have exactly the same bytes, including case. `Train` is not `train`.
+`configure_runtime` owns the process-wide output and thread choices
+constructed later in this chapter. `dispatch_command_line` owns every
+decision based on `argc` and `argv`. The return passes its success or
+failure result back to the process.
+
+Help and version are valid only when they are the sole argument after
+the program name. One helper records that repeated condition:
+
+```c
+static int is_standalone_argument(int argc, char **argv,
+                                  const char *expected)
+{
+    return argc == TOP_LEVEL_COMMAND_ARGUMENTS
+        && strcmp(argv[COMMAND_ARGUMENT_INDEX], expected) == 0;
+}
+```
+
+`TOP_LEVEL_COMMAND_ARGUMENTS` is two: the program name plus one command.
+`COMMAND_ARGUMENT_INDEX` is one: the slot holding that command. Naming
+the two roles keeps the indexing policy out of the helper. Its
+`expected` parameter lets help and version share the rule without
+sharing their output. `strcmp(a, b) == 0` means the two strings have
+exactly the same bytes, including case.
+
+The top-level dispatcher can now read in source order as the public
+command-line grammar:
+
+```c
+static int dispatch_command_line(int argc, char **argv)
+{
+    if (is_standalone_argument(argc, argv, "--help")) {
+        print_usage(stdout);
+        return EXIT_SUCCESS;
+    }
+    if (is_standalone_argument(argc, argv, "--version")) {
+        printf("tiny-agenc %s\n", TINY_AGENC_VERSION);
+        return EXIT_SUCCESS;
+    }
+    if (argc < TOP_LEVEL_COMMAND_ARGUMENTS)
+        usage_error(NULL);
+    return dispatch_subcommand(argc, argv);
+}
+```
+
+Each completed information request returns immediately. Therefore the
+remaining path is neither a valid help nor a valid version request. No
+argument reaches `usage_error`; every other request has a word that can
+be dispatched. The exact-count helper means `tiny-agenc --help extra`
+cannot discard the extra word and report success.
+
+The remaining helper gives the shifted view an explicit name before
+choosing its parser:
+
+```c
+static int dispatch_subcommand(int argc, char **argv)
+{
+    const char *subcommand      = argv[COMMAND_ARGUMENT_INDEX];
+    int         subcommand_argc = argc - COMMAND_ARGUMENT_INDEX;
+    char      **subcommand_argv = argv + COMMAND_ARGUMENT_INDEX;
+
+    if (strcmp(subcommand, "train") == 0)
+        return parse_train(subcommand_argc, subcommand_argv);
+    if (strcmp(subcommand, "sample") == 0)
+        return parse_sample(subcommand_argc, subcommand_argv);
+    usage_error("unknown command '%s'", subcommand);
+}
+```
 
 No argument means `argc < 2`; `usage_error(NULL)` prints the full usage
 without inventing a more specific reason. A recognized command receives
-the shifted view above. Every other word reaches the final error.
+the shifted count and pointer built above. Every other word reaches the
+final error. `Train` is not `train`.
 `usage_error` never returns, so C does not need a return statement after
 that last call.
 
 Chapter 2 used
 [`EXIT_FAILURE`](02-foundations.md#one-place-decides-how-to-stop) when
-`die` could not return. `main` adds the matching `EXIT_SUCCESS` when an
-information request completes. The process's **exit status** gives the
-calling shell or script one small result: success means the requested
-command completed; failure means it did not.
+`die` could not return. The dispatcher adds the matching `EXIT_SUCCESS`
+when an information request completes. The process's **exit status**
+gives the calling shell or script one small result: success means the
+requested command completed; failure means it did not.
 
 ## Let each parser fill one record
 
@@ -286,20 +341,34 @@ therefore become compact results for the later selection. The all-zero
 row marks the end of the table. These letters are parser labels; Tiny
 AgenC does not advertise `-s` or any other short option.
 
-Begin with the opening, string-only portion of
-[`parse_train`](../src/main.c). This shortened excerpt stops before any
-numeric converter is called:
+Begin with the loop in [`parse_train`](../src/main.c):
 
 ```c
 int letter;
 
 opterr = 0;
-while ((letter = getopt_long(argc, argv, "", TRAIN_FLAGS, NULL)) != -1) {
-    switch (letter) {
-    case 'd': options.data_path = optarg;                                                          break;
-    case 'v': options.validation_path = optarg;                                                    break;
-    case 'o': options.out_path  = optarg;                                                          break;
+while ((letter = getopt_long(argc, argv, "", TRAIN_FLAGS, NULL)) != -1)
+    parse_train_option(&options, letter, argc, argv);
 ```
+
+The loop only discovers options and sends each result to a small
+dispatcher. Its first three cases handle strings:
+
+```c
+switch (letter) {
+case 'd':
+    options->data_path = optarg;
+    return;
+case 'v':
+    options->validation_path = optarg;
+    return;
+case 'o':
+    options->out_path = optarg;
+    return;
+```
+
+These are shortened excerpts: the first omits the function wrapper and
+the second stops before the numeric cases.
 
 `opterr = 0` stops the library from printing a diagnostic in its own
 voice. Each successful parse puts the option value in `optarg`. The
@@ -309,10 +378,11 @@ accepted. `TRAIN_FLAGS` supplies the long-option table. The final
 long option.
 
 `switch (letter)` selects one labeled branch. A line such as
-`case 'd':` runs when `letter` contains that character. `break` leaves
-the switch instead of falling into the following case. C calls this
-multiway selection a **switch statement**. These first three branches
-assign path strings directly.
+`case 'd':` runs when `letter` contains that character. Each assignment
+is followed by `return`, which leaves the dispatcher before execution
+can fall into the following case. C calls this multiway selection a
+**switch statement**. These first three branches assign path strings
+directly.
 
 **Predict:** after the loop sees `--out first.bin --out second.bin`,
 which path remains in `options.out_path`?
@@ -366,7 +436,7 @@ Here is the complete [`parse_int`](../src/main.c):
 static int parse_int(const char *text, int min, int max, const char *what)
 {
     char *end;
-    long  value = strtol(text, &end, 10);
+    long  value = strtol(text, &end, DECIMAL_RADIX);
 
     if (*text == '\0' || *end != '\0' || value < min || value > max)
         die("%s wants an integer in [%d, %d], not '%s'", what, min, max, text);
@@ -374,8 +444,9 @@ static int parse_int(const char *text, int min, int max, const char *what)
 }
 ```
 
-`strtol` means *string to long*. The third argument, `10`, selects
-decimal notation. It writes the address of the first unconsumed
+`strtol` means *string to long*. `DECIMAL_RADIX` is ten, selecting
+decimal notation without leaving an unexplained literal at the call.
+The function writes the address of the first unconsumed
 character into `end`. The `if` joins the three refusals: empty text,
 leftover text, or a value outside the caller's range. Only then does the
 cast narrow the `long` to `int`.
@@ -435,7 +506,7 @@ The source copies the bits into a 32-bit unsigned integer and tests that
 signature. Here are the complete helpers and parser:
 
 ```c
-static const float    MAX_FLAG_VALUE      = 1e6f;
+static const float MAX_FLAG_VALUE = 1e6f;
 static const uint32_t FLOAT_EXPONENT_BITS = 0x7F800000u;
 
 static int is_finite_number(float value)
@@ -500,7 +571,7 @@ static unsigned long long parse_seed(const char *text)
      * value and silently clamp overflow, both lies about the seed. */
     errno = 0;
 
-    unsigned long long value = strtoull(text, &end, 10);
+    unsigned long long value = strtoull(text, &end, DECIMAL_RADIX);
 
     if (!isdigit((unsigned char)text[0]) || *end != '\0' || errno == ERANGE)
         die("--seed wants a whole number, not '%s'", text);
@@ -538,47 +609,83 @@ largest `unsigned long long`. It rejects a plus sign, minus sign,
 leading whitespace, trailing text, and overflow. The three converters
 are separate because the three command values mean different things.
 
-Now every branch in the complete parsing loop has a constructed
+Now every branch in the complete option dispatcher has a constructed
 meaning:
 
 ```c
-int letter;
-
-opterr = 0;
-while ((letter = getopt_long(argc, argv, "", TRAIN_FLAGS, NULL)) != -1) {
+static void parse_train_option(TrainOptions *options, int letter,
+                               int argc, char **argv)
+{
     switch (letter) {
-    case 'd': options.data_path = optarg;                                                          break;
-    case 'v': options.validation_path = optarg;                                                    break;
-    case 'o': options.out_path  = optarg;                                                          break;
-    case 's': options.steps = parse_int(optarg, 1, MAX_STEP_COUNT, "--steps");                     break;
-    case 'l': options.cfg.layer_count = parse_int(optarg, 1, MODEL_MAX_LAYER_COUNT, "--layers");   break;
-    case 'h': options.cfg.head_count = parse_int(optarg, 1, MODEL_MAX_HEAD_COUNT, "--heads");      break;
-    case 'w': options.cfg.d_model = parse_int(optarg, 1, MODEL_MAX_D_MODEL, "--width");            break;
-    case 'k': options.cfg.block_size = parse_int(optarg, 1, MODEL_MAX_BLOCK_SIZE, "--block");      break;
-    case 'b': options.cfg.batch_size = parse_int(optarg, 1, MODEL_MAX_TOKENS_PER_PASS, "--batch"); break;
-    case 'r': options.learning_rate = parse_positive(optarg, "--lr");                              break;
-    case 'x': options.seed = parse_seed(optarg);                                                   break;
-    default:  invalid_option("train", argc, argv);
+    case 'd':
+        options->data_path = optarg;
+        return;
+    case 'v':
+        options->validation_path = optarg;
+        return;
+    case 'o':
+        options->out_path = optarg;
+        return;
+    case 's':
+        options->steps = parse_int(optarg, MINIMUM_OPTION_VALUE,
+                                   MAX_STEP_COUNT, "--steps");
+        return;
+    case 'l':
+        options->cfg.layer_count =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_LAYER_COUNT, "--layers");
+        return;
+    case 'h':
+        options->cfg.head_count =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_HEAD_COUNT, "--heads");
+        return;
+    case 'w':
+        options->cfg.d_model =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_D_MODEL, "--width");
+        return;
+    case 'k':
+        options->cfg.block_size =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_BLOCK_SIZE, "--block");
+        return;
+    case 'b':
+        options->cfg.batch_size =
+            parse_int(optarg, MINIMUM_OPTION_VALUE,
+                      MODEL_MAX_TOKENS_PER_PASS, "--batch");
+        return;
+    case 'r':
+        options->learning_rate = parse_positive(optarg, "--lr");
+        return;
+    case 'x':
+        options->seed = parse_seed(optarg);
+        return;
+    default:
+        invalid_option("train", argc, argv);
     }
 }
-if (options.data_path == NULL)
-    usage_error("train requires --data FILE");
-if (optind != argc)
-    usage_error("train: unexpected argument '%s'", argv[optind]);
+```
+
+This is the complete [`parse_train_option`](../src/main.c). The numeric
+cases select the grammar belonging to each flag. Every recognized case
+returns immediately, so the control flow does not build a rightward
+nest. The `default` branch catches every unlisted parser result.
+`invalid_option` never returns.
+
+After the loop, the coordinator validates the filled record and hands
+it to training:
+
+```c
+validate_train_options(&options, argc, argv);
 return run_train(options);
 ```
 
-This is the complete parsing loop and handoff from
-[`parse_train`](../src/main.c); the function wrapper and initializer
-remain omitted. The numeric cases now select the grammar belonging to
-each flag. The `default` branch catches every unlisted parser result.
-`invalid_option` never returns, so it needs no trailing `break`.
-
 `getopt_long` returns `-1` when no options remain. `optind` then names
-the first unconsumed word. If it differs from `argc`, the parser rejects
-that extra word rather than guessing what it means. The required data
-check happens before `run_train`, so setup never sees a null training
-path.
+the first unconsumed word. `validate_train_options` rejects that extra
+word rather than guessing what it means, and checks the required data
+path. The checks happen before `run_train`, so setup never sees a null
+training path.
 
 After constructing the record this way, the mechanism has earned its
 name: **command-line option parsing** turns option strings into one
@@ -829,7 +936,8 @@ static Dataset *load_training_data(const TrainOptions *options,
     if (dataset == NULL)
         die("corpus %s cannot fit in a token buffer on this platform",
             options->data_path);
-    if (dataset_token_count(dataset) < (size_t)options->cfg.block_size + 1)
+    if (dataset_token_count(dataset)
+        < (size_t)options->cfg.block_size + NEXT_TOKEN_OFFSET)
         die("corpus %s is smaller than one training window",
             options->data_path);
     return dataset;
@@ -901,7 +1009,8 @@ static Dataset *load_validation_data(const TrainOptions *options,
     if (dataset_token_count(dataset) != length)
         die("validation corpus %s contains bytes absent from training data",
             options->validation_path);
-    if (dataset_token_count(dataset) < (size_t)options->cfg.block_size + 1)
+    if (dataset_token_count(dataset)
+        < (size_t)options->cfg.block_size + NEXT_TOKEN_OFFSET)
         die("validation corpus %s is smaller than one training window",
             options->validation_path);
     return dataset;
@@ -934,8 +1043,9 @@ static void validate_training_model(TrainOptions *options,
         die("model memory requirements overflow this platform");
     if (memory.total_bytes > MODEL_MAX_CHECKPOINT_RESIDENT_BYTES)
         die("model needs %.1f MiB of buffers; the CLI limit is %.0f MiB",
-            (double)memory.total_bytes / (1024.0 * 1024.0),
-            (double)MODEL_MAX_CHECKPOINT_RESIDENT_BYTES / (1024.0 * 1024.0));
+            (double)memory.total_bytes / BYTES_PER_MEBIBYTE,
+            (double)MODEL_MAX_CHECKPOINT_RESIDENT_BYTES
+                / BYTES_PER_MEBIBYTE);
 }
 ```
 
@@ -1019,18 +1129,22 @@ if (m == NULL)
 print_architecture(stderr, m);
 
 size_t prompt_length = strlen(options.prompt);
-int   *ids           = emalloc((1 + prompt_length + (size_t)options.length) * sizeof *ids);
+int *ids = emalloc((SAMPLE_SEED_TOKENS + prompt_length
+                    + (size_t)options.length) * sizeof *ids);
 
 /* A newline before the prompt puts the model at start-of-line, the
  * state every line of its corpus began from. */
 ids[0] = newline_id(tk);
 
-int  known = 1 + (int)tokenizer_encode(tk, ids + 1, options.prompt, prompt_length);
+int known = SAMPLE_SEED_TOKENS
+          + (int)tokenizer_encode(tk, ids + SAMPLE_SEED_TOKENS,
+                                  options.prompt, prompt_length);
 int  total = known + options.length;
 Rng *rng   = rng_new(options.seed);
 
 model_sample(m, rng, ids, known, total, options.temperature);
-print_text(tk, ids + 1, total - 1);   /* everything but the seed newline */
+print_text(tk, ids + SAMPLE_SEED_TOKENS,
+           total - SAMPLE_SEED_TOKENS);
 ```
 
 This shortened excerpt from [`run_sample`](../src/main.c) shows setup
@@ -1043,8 +1157,9 @@ report the path but cannot truthfully diagnose which internal check
 failed. Its suggestion to train one first is therefore a hint, not a
 classification.
 
-The allocation reserves one seed-newline slot, at most one slot per
-prompt byte, and the requested generated length. Unknown prompt bytes
+`SAMPLE_SEED_TOKENS` is one, the hidden newline prefix length. The
+allocation reserves that seed-newline slot, at most one slot per prompt
+byte, and the requested generated length. Unknown prompt bytes
 are skipped under
 [Chapter 3's tokenizer contract](03-data.md#encode-without-inventing-a-token);
 the allocation remains large enough. A separate newline places the
@@ -1136,11 +1251,17 @@ of that count.
 
 Training has a different problem. When standard output is redirected to
 a file, a C library may hold many lines in memory before writing them.
-A person following the file would see long pauses. The first line of
-`main` requests line buffering:
+A person following the file would see long pauses. The runtime setup
+groups the line-buffering request with the thread choice built next:
 
 ```c
-setvbuf(stdout, NULL, _IOLBF, 0);
+static void configure_runtime(void)
+{
+    /* Training narrates as it goes; line-buffering keeps the story
+     * streaming even when stdout is a file being tailed. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    choose_thread_count();
+}
 ```
 
 `setvbuf` changes a stream's buffering policy; `_IOLBF` requests that a
@@ -1193,7 +1314,8 @@ The source turns that observation into a modest default:
 static void choose_thread_count(void)
 {
 #ifdef _OPENMP
-    int half = omp_get_num_procs() / 2;
+    int half =
+        omp_get_num_procs() / LOGICAL_THREADS_PER_PHYSICAL_CORE;
 
     if (getenv("OMP_NUM_THREADS") == NULL && half > 0)
         omp_set_num_threads(half);
@@ -1213,10 +1335,10 @@ Presence matters, not validity. Even an empty `OMP_NUM_THREADS`
 environment value prevents the program from replacing the operator's
 choice; the OpenMP runtime then interprets that value. If only one
 processor is reported, `half` is zero and the program leaves the runtime
-default alone. `main` calls this function before help and version, so
-the OpenMP runtime may be consulted even for an information command.
-The operator-respecting fallback is Tiny AgenC's **runtime thread
-default**.
+default alone. `configure_runtime` calls this function before command
+dispatch, so the OpenMP runtime may be consulted even for an
+information command. The operator-respecting fallback is Tiny AgenC's
+**runtime thread default**.
 
 Chapter 4's
 [conditional header region](04-poor-mans-tensors.md#the-complete-header)
@@ -1240,7 +1362,7 @@ That adds `-march=native` and may produce an executable that assumes
 instructions from the build CPU. It is useful for a controlled local
 measurement, not as the default artifact to hand to another machine.
 `OPENMP` and `NATIVE` are build-time policies. `OMP_NUM_THREADS` and
-`choose_thread_count` are runtime policies.
+`configure_runtime` govern runtime policy.
 
 All parts are now in place. The **command-line boundary** narrows
 untrusted words and paths into the values accepted by the next

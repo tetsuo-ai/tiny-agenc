@@ -14,14 +14,54 @@ struct Param {
     float *second_moment;   /* running average of squared gradients */
 };
 
-enum { PARAM_BUFFERS = 4 };   /* values, gradient, and two moments */
+typedef struct {
+    AdamW  opt;
+    size_t count;
+    float  correction1;
+    float  correction2;
+    float  decay;
+    double safe;
+    double inverse_correction1;
+    double inverse_correction2;
+    double inverse_epsilon;
+} PreparedAdamW;
+
+enum {
+    PARAM_VALUE_BUFFER,
+    PARAM_GRADIENT_BUFFER,
+    PARAM_FIRST_MOMENT_BUFFER,
+    PARAM_SECOND_MOMENT_BUFFER,
+    PARAM_BUFFER_COUNT,
+};
+
+static const uint32_t FLOAT_EXPONENT_MASK = 0x7F800000u;
+static const double ADAMW_SAFE_RANGE_DIVISOR = 4.0;
+static const double ADAMW_EPSILON_RANGE_DIVISOR = 2.0;
+
+static int finite_float(float value);
+static Param *param_new(int rows, int cols);
+static int parameter_has_matrix_shape(const Param *p);
+static int adamw_corrections_valid(const PreparedAdamW *step);
+static int adamw_prepare(PreparedAdamW *prepared, const Param *p,
+                         AdamW opt, int step);
+static int adamw_stored_entry_valid(const Param *p, size_t i,
+                                    float gradient);
+static int adamw_candidate_moments_valid(const PreparedAdamW *step,
+                                         float first, float second);
+static int adamw_update_bounds_valid(const Param *p,
+                                     const PreparedAdamW *step, size_t i,
+                                     float first, float second);
+static int adamw_inputs_valid(const Param *p, const PreparedAdamW *step);
+static void adamw_apply_entry(Param *p, const PreparedAdamW *step, size_t i);
+static void adamw_apply(Param *p, const PreparedAdamW *step);
+static int parameter_values_are_finite(const Param *p);
 
 static int finite_float(float value)
 {
     uint32_t bits;
 
     memcpy(&bits, &value, sizeof bits);
-    return (bits & 0x7F800000u) != 0x7F800000u;
+    return (bits & FLOAT_EXPONENT_MASK) != FLOAT_EXPONENT_MASK;
 }
 
 /* One backing allocation carved four ways; the gradient region starts zeroed. */
@@ -33,23 +73,23 @@ static Param *param_new(int rows, int cols)
 
     size_t count = (size_t)rows * (size_t)cols;
 
-    if (count > SIZE_MAX / PARAM_BUFFERS
-        || PARAM_BUFFERS * count > SIZE_MAX / sizeof(float))
+    if (count > SIZE_MAX / PARAM_BUFFER_COUNT
+        || PARAM_BUFFER_COUNT * count > SIZE_MAX / sizeof(float))
         return NULL;
 
-    Param  *p     = emalloc(sizeof *p);
-    float  *store = ecalloc(PARAM_BUFFERS * count, sizeof *store);
+    Param *p = emalloc(sizeof *p);
+    float *store = ecalloc(PARAM_BUFFER_COUNT * count, sizeof *store);
 
-    p->values        = mat_make(store, rows, cols);
-    p->gradient      = store + count;
-    p->first_moment  = store + 2 * count;
-    p->second_moment = store + 3 * count;
+    p->values = mat_make(store + PARAM_VALUE_BUFFER * count, rows, cols);
+    p->gradient = store + PARAM_GRADIENT_BUFFER * count;
+    p->first_moment = store + PARAM_FIRST_MOMENT_BUFFER * count;
+    p->second_moment = store + PARAM_SECOND_MOMENT_BUFFER * count;
     return p;
 }
 
 Param *param_new_gaussian(int rows, int cols, float stddev, Rng *rng)
 {
-    Param  *p     = param_new(rows, cols);
+    Param *p = param_new(rows, cols);
 
     if (p == NULL)
         return NULL;
@@ -61,7 +101,7 @@ Param *param_new_gaussian(int rows, int cols, float stddev, Rng *rng)
 
 Param *param_new_constant(int rows, int cols, float value)
 {
-    Param  *p     = param_new(rows, cols);
+    Param *p = param_new(rows, cols);
 
     if (p == NULL)
         return NULL;
@@ -116,7 +156,7 @@ void param_scale_gradient(Param *p, float factor)
 
 /* Shapes with more than one row and column get weight decay; gains,
  * biases, and other vectors do not. */
-static int is_matrix(const Param *p)
+static int parameter_has_matrix_shape(const Param *p)
 {
     return p->values.rows > 1 && p->values.cols > 1;
 }
@@ -130,18 +170,6 @@ int param_adamw_recipe_valid(AdamW opt, int step)
         && finite_float(opt.epsilon) && opt.epsilon > 0.0f
         && finite_float(opt.weight_decay) && opt.weight_decay >= 0.0f;
 }
-
-typedef struct {
-    AdamW  opt;
-    size_t count;
-    float  correction1;
-    float  correction2;
-    float  decay;
-    double safe;
-    double inverse_correction1;
-    double inverse_correction2;
-    double inverse_epsilon;
-} PreparedAdamW;
 
 static int adamw_corrections_valid(const PreparedAdamW *step)
 {
@@ -157,13 +185,14 @@ static int adamw_prepare(PreparedAdamW *prepared, const Param *p,
 
     prepared->opt = opt;
     prepared->count = mat_size(p->values);
-    prepared->decay = is_matrix(p) ? opt.weight_decay : 0.0f;
+    prepared->decay =
+        parameter_has_matrix_shape(p) ? opt.weight_decay : 0.0f;
     prepared->correction1 = 1.0f - powf(opt.beta1, (float)step);
     prepared->correction2 = 1.0f - powf(opt.beta2, (float)step);
 
     if (!adamw_corrections_valid(prepared))
         return 0;
-    prepared->safe = (double)FLT_MAX / 4.0;
+    prepared->safe = (double)FLT_MAX / ADAMW_SAFE_RANGE_DIVISOR;
     prepared->inverse_correction1 = 1.0 / (double)prepared->correction1;
     prepared->inverse_correction2 = 1.0 / (double)prepared->correction2;
     prepared->inverse_epsilon = 1.0 / (double)prepared->opt.epsilon;
@@ -201,7 +230,8 @@ static int adamw_update_bounds_valid(const Param *p,
     double change_bound =
         (double)step->opt.learning_rate * direction_bound;
 
-    return (double)step->opt.epsilon <= step->safe / 2.0
+    return (double)step->opt.epsilon
+               <= step->safe / ADAMW_EPSILON_RANGE_DIVISOR
         && variance_bound <= step->safe
         && smoothed_bound <= step->safe
         && ratio_bound <= step->safe
@@ -262,7 +292,7 @@ int param_adamw_step(Param *p, AdamW opt, int step)
     return 0;
 }
 
-static int values_are_finite(const Param *p)
+static int parameter_values_are_finite(const Param *p)
 {
     size_t count = mat_size(p->values);
 
@@ -277,9 +307,11 @@ int param_write(const Param *p, FILE *stream)
 {
     size_t count = mat_size(p->values);
 
-    if (!values_are_finite(p))
+    if (!parameter_values_are_finite(p))
         return -1;
-    return fwrite(p->values.vals, sizeof *p->values.vals, count, stream) == count ? 0 : -1;
+    return fwrite(p->values.vals, sizeof *p->values.vals, count, stream)
+               == count
+        ? 0 : -1;
 }
 
 int param_read(Param *p, FILE *stream)
@@ -288,7 +320,7 @@ int param_read(Param *p, FILE *stream)
 
     if (fread(p->values.vals, sizeof *p->values.vals, count, stream) != count)
         return -1;
-    return values_are_finite(p) ? 0 : -1;
+    return parameter_values_are_finite(p) ? 0 : -1;
 }
 
 void param_free(Param *p)

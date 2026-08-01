@@ -514,9 +514,13 @@ void gelu_backward(Mat d_x, Mat d_out, Mat x)
         float value   = x.vals[i];
         float inner   = GELU_SQRT_2_OVER_PI * (value + GELU_CUBIC_COEFF * value * value * value);
         float tanh_of = tanhf(inner);
-        float d_inner = GELU_SQRT_2_OVER_PI * (1.0f + 3.0f * GELU_CUBIC_COEFF * value * value);
-        float slope   = 0.5f * (1.0f + tanh_of)
-                      + 0.5f * value * (1.0f - tanh_of * tanh_of) * d_inner;
+        float d_inner =
+            GELU_SQRT_2_OVER_PI
+            * (1.0f + CUBIC_DERIVATIVE_FACTOR * GELU_CUBIC_COEFF
+                          * value * value);
+        float slope = GELU_HALF * (1.0f + tanh_of)
+                    + GELU_HALF * value * (1.0f - tanh_of * tanh_of)
+                          * d_inner;
 
         d_x.vals[i] += slope * d_out.vals[i];
     }
@@ -525,9 +529,10 @@ void gelu_backward(Mat d_x, Mat d_out, Mat x)
 
 `count` flattens the matrix because no entry consults another entry.
 `value`, `inner`, and `tanh_of` replay the forward calculation.
-`d_inner` is the first local slope derived above. The two terms in
-`slope` are the two product paths. The final line multiplies by the
-arriving loss rate and accumulates.
+`CUBIC_DERIVATIVE_FACTOR` names the power-rule factor three, and
+`GELU_HALF` names the repeated half. `d_inner` is the first local slope
+derived above. The two terms in `slope` are the two product paths. The
+final line multiplies by the arriving loss rate and accumulates.
 
 For large negative ordinary finite inputs, the slope approaches zero.
 For large positive ordinary finite inputs, it approaches one.
@@ -791,29 +796,35 @@ d_logits[row,c]
 target_mark[c] is 1 when c is the target, and 0 otherwise.
 ```
 
-That construction maps directly to the complete loop:
+That construction maps directly to one row helper and its caller:
 
 ```c
 void crossentropy_backward(Mat d_logits, Mat probs, const int *targets)
 {
     float mean_scale = 1.0f / (float)probs.rows;
 
-    for (int row = 0; row < probs.rows; row++) {
-        const float *prob     = mat_row(probs, row);
-        float       *d_logit  = mat_row(d_logits, row);
+    for (int row = 0; row < probs.rows; row++)
+        crossentropy_backward_row(mat_row(d_logits, row),
+                                  mat_row(probs, row), targets[row],
+                                  probs.cols, mean_scale);
+}
 
-        for (int c = 0; c < probs.cols; c++) {
-            float indicator = (c == targets[row]) ? 1.0f : 0.0f;
+static void crossentropy_backward_row(float *d_logits, const float *probs,
+                                      int target, int count,
+                                      float mean_scale)
+{
+    for (int channel = 0; channel < count; channel++) {
+        float target_probability = channel == target ? 1.0f : 0.0f;
 
-            d_logit[c] += (prob[c] - indicator) * mean_scale;
-        }
+        d_logits[channel] +=
+            (probs[channel] - target_probability) * mean_scale;
     }
 }
 ```
 
 `mean_scale` is `1/R`. The outer loop selects matching probability,
-target, and gradient rows. The conditional constructs the
-`target_mark` value under the source name `indicator`. The final line
+target, and gradient rows. The row helper's conditional constructs the
+`target_mark` value under the name `target_probability`. The final line
 performs the two-path subtraction, mean scaling, and accumulation.
 Chapter 6 first builds this [bet-sheet
 grade](06-backprop-by-hand.md#send-the-bet-sheet-grade-back-to-logits).
@@ -1261,10 +1272,13 @@ typedef struct {
     float d_norm_norm_mean;
 } LayernormGradientMeans;
 
-static LayernormGradientMeans
-layernorm_gradient_means(const LayernormBackwardRow *row)
+static LayernormGradientMeans layernorm_gradient_means(
+    const LayernormBackwardRow *row)
 {
-    LayernormGradientMeans means = { 0.0f, 0.0f };
+    LayernormGradientMeans means = {
+        .d_norm_mean = 0.0f,
+        .d_norm_norm_mean = 0.0f,
+    };
 
     for (int c = 0; c < row->channels; c++) {
         float norm   = (row->input[c] - row->mean) * row->rstd;
@@ -1298,15 +1312,15 @@ static void layernorm_backward_row(const LayernormBackward *backward,
                                    int row)
 {
     LayernormBackwardRow backward_row = {
-        mat_row(backward->x, row),
-        mat_row(backward->d_out, row),
-        mat_row(backward->d_x, row),
-        backward->d_gain,
-        backward->d_bias,
-        backward->gain,
-        backward->x.cols,
-        backward->means[row],
-        backward->rstds[row],
+        .input = mat_row(backward->x, row),
+        .d_output = mat_row(backward->d_out, row),
+        .d_input = mat_row(backward->d_x, row),
+        .d_gain = backward->d_gain,
+        .d_bias = backward->d_bias,
+        .gain = backward->gain,
+        .channels = backward->x.cols,
+        .mean = backward->means[row],
+        .rstd = backward->rstds[row],
     };
     LayernormGradientMeans means =
         layernorm_gradient_means(&backward_row);
@@ -1318,8 +1332,16 @@ void layernorm_backward(Mat d_x, float *d_gain, float *d_bias, Mat d_out,
                         Mat x, const float *gain,
                         const float *means, const float *rstds)
 {
-    LayernormBackward backward =
-        { d_x, d_gain, d_bias, d_out, x, gain, means, rstds };
+    LayernormBackward backward = {
+        .d_x = d_x,
+        .d_gain = d_gain,
+        .d_bias = d_bias,
+        .d_out = d_out,
+        .x = x,
+        .gain = gain,
+        .means = means,
+        .rstds = rstds,
+    };
 
     for (int row = 0; row < x.rows; row++)
         layernorm_backward_row(&backward, row);
@@ -1574,7 +1596,7 @@ softmax weights, not pre-softmax scores. During backward,
 `d_score`. The source then writes:
 
 ```c
-float d_raw = position->scale * position->d_weights[t2];
+float d_raw = position->scale * position->d_weights[source];
 ```
 
 Despite the local name, this value is the coefficient called `d_dot`

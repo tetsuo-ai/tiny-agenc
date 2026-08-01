@@ -15,6 +15,15 @@ struct Tokenizer {
     int  byte_to_id[BYTE_VALUES];
 };
 
+static Tokenizer *from_seen_bytes(const int seen[BYTE_VALUES]);
+static int read_vocabulary_size(FILE *stream, int32_t *vocab_size);
+static int read_vocabulary_bytes(FILE *stream, char bytes[BYTE_VALUES],
+                                 int32_t vocab_size);
+static int vocabulary_is_canonical(const char bytes[BYTE_VALUES],
+                                   int32_t vocab_size);
+static Tokenizer *from_canonical_vocabulary(
+    const char bytes[BYTE_VALUES], int32_t vocab_size);
+
 /* Walking byte values in ascending order sorts the vocabulary. */
 static Tokenizer *from_seen_bytes(const int seen[BYTE_VALUES])
 {

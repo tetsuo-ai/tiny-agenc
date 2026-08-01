@@ -42,6 +42,10 @@ manifest_contains() {
         END { exit found ? 0 : 1 }' EVIDENCE.sha256
 }
 
+cleanup() {
+    rm -rf -- "$temporary_dir"
+}
+
 if ! sha256sum --check --strict --quiet EVIDENCE.sha256; then
     fail "EVIDENCE.sha256 does not match the current evidence inputs"
 fi
@@ -119,9 +123,6 @@ magic=$(od -An -tx1 -N4 tiny-agenc.bin | tr -d '[:space:]')
 expect_value "checkpoint magic" "$magic" 54414743
 
 temporary_dir=$(mktemp -d)
-cleanup() {
-    rm -rf -- "$temporary_dir"
-}
 trap cleanup EXIT
 
 "$EXECUTABLE" sample --model tiny-agenc.bin \

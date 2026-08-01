@@ -26,6 +26,7 @@ TEMPERATURE_MAX = 3.0
 TEMPERATURE_STEP = 0.025
 LOGITS = (2.0, 1.0, 0.0)
 MARKED_TEMPERATURES = (0.5, 1.0, 2.0)
+TOKEN_COUNT = len(LOGITS)
 
 INK = "#17233d"
 MUTED = "#5d6878"
@@ -36,6 +37,8 @@ ORANGE = "#b84e16"
 GREEN = "#2d7a55"
 PANEL = "#ffffff"
 TABLE_FILL = "#f6f8fb"
+CURVE_COLORS = (BLUE, ORANGE, GREEN)
+CURVE_CLASSES = ("id-zero", "id-one", "id-two")
 
 
 def softmax_at_temperature(temperature):
@@ -90,24 +93,25 @@ def temperatures():
     ]
 
 
-def main():
+def probability_curves():
     samples = [
         (temperature, softmax_at_temperature(temperature))
         for temperature in temperatures()
     ]
-    colors = (BLUE, ORANGE, GREEN)
-    curve_classes = ("id-zero", "id-one", "id-two")
     curves = []
 
-    for token_id in range(len(LOGITS)):
+    for token_id in range(TOKEN_COUNT):
         curves.append(
             [
                 (plot_x(temperature), plot_y(probabilities[token_id]))
                 for temperature, probabilities in samples
             ]
         )
+    return curves
 
-    svg = [
+
+def start_svg():
+    return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
@@ -177,6 +181,8 @@ def main():
         ),
     ]
 
+
+def draw_legend_and_axes(svg):
     legend_x = (LEFT, LEFT + 176, LEFT + 352)
     legend_labels = (
         "id 0, logit 2",
@@ -184,7 +190,7 @@ def main():
         "id 2, logit 0",
     )
 
-    for x, label, color in zip(legend_x, legend_labels, colors):
+    for x, label, color in zip(legend_x, legend_labels, CURVE_COLORS):
         svg.append(
             f'  <line x1="{x:.2f}" y1="104" x2="{x + 38:.2f}" '
             f'y2="104" stroke="{color}" stroke-width="3.2"/>'
@@ -232,32 +238,36 @@ def main():
         )
     )
 
-    for points, css_class in zip(curves, curve_classes):
+
+def draw_curves_and_markers(svg, curves):
+    for points, css_class in zip(curves, CURVE_CLASSES):
         svg.append(polyline(points, css_class))
 
     for temperature in MARKED_TEMPERATURES:
         probabilities = softmax_at_temperature(temperature)
-        for probability, color in zip(probabilities, colors):
+        for probability, color in zip(probabilities, CURVE_COLORS):
             svg.append(
                 f'  <circle cx="{plot_x(temperature):.2f}" '
                 f'cy="{plot_y(probability):.2f}" r="4.5" '
                 f'fill="{PANEL}" stroke="{color}" stroke-width="2.5"/>'
             )
 
+
+def draw_probability_table(svg):
     table_x = LEFT
     table_y = 540
     table_width = PLOT_WIDTH
     row_height = 32
     label_width = 174
-    value_width = (table_width - label_width) / 3
-    table_height = row_height * 4
+    value_width = (table_width - label_width) / len(MARKED_TEMPERATURES)
+    table_height = row_height * (TOKEN_COUNT + 1)
     svg.append(
         f'  <rect x="{table_x:.2f}" y="{table_y:.2f}" '
         f'width="{table_width:.2f}" height="{table_height:.2f}" '
         f'rx="5" fill="{TABLE_FILL}" stroke="{GRID}"/>'
     )
 
-    for row in range(1, 4):
+    for row in range(1, TOKEN_COUNT + 1):
         y = table_y + row * row_height
         svg.append(line(table_x, y, table_x + table_width, y, "grid"))
 
@@ -270,7 +280,7 @@ def main():
             "grid",
         )
     )
-    for column in range(1, 3):
+    for column in range(1, len(MARKED_TEMPERATURES)):
         x = table_x + label_width + column * value_width
         svg.append(
             line(x, table_y, x, table_y + table_height, "grid")
@@ -306,7 +316,7 @@ def main():
                 "table-value",
             )
         )
-        for token_id in range(3):
+        for token_id in range(TOKEN_COUNT):
             svg.append(
                 text(
                     x,
@@ -316,11 +326,23 @@ def main():
                 )
             )
 
+
+def write_svg(svg):
     svg.append("</svg>")
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as output_file:
         output_file.write("\n".join(svg) + "\n")
+
+
+def main():
+    curves = probability_curves()
+    svg = start_svg()
+
+    draw_legend_and_axes(svg)
+    draw_curves_and_markers(svg, curves)
+    draw_probability_table(svg)
+    write_svg(svg)
 
 
 if __name__ == "__main__":

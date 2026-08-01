@@ -112,10 +112,8 @@ def legend_item(x, y, color, label, dash=None):
     ]
 
 
-def main():
-    verify_fixture()
-
-    svg = [
+def start_svg():
+    return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
@@ -180,6 +178,8 @@ def main():
         ),
     ]
 
+
+def draw_legend_and_axes(svg):
     svg.extend(legend_item(LEFT, 102, BLUE, "y = x^2"))
     svg.extend(
         legend_item(215, 102, ORANGE, "h = 1: slope 5", "10 7")
@@ -203,6 +203,8 @@ def main():
     svg.append(line(LEFT, PLOT_BOTTOM, WIDTH - RIGHT, PLOT_BOTTOM, "axis"))
     svg.append(line(LEFT, TOP, LEFT, PLOT_BOTTOM, "axis"))
 
+
+def draw_square_curve(svg):
     samples = 400
     path_parts = []
     for index in range(samples + 1):
@@ -217,6 +219,8 @@ def main():
         'stroke-linejoin="round"/>'
     )
 
+
+def draw_slope_lines(svg):
     far_x, far_y, _ = SECANTS[0]
     near_x, near_y, _ = SECANTS[1]
     svg.append(
@@ -247,6 +251,10 @@ def main():
         )
     )
 
+
+def draw_labeled_points(svg):
+    far_x, far_y, _ = SECANTS[0]
+    near_x, near_y, _ = SECANTS[1]
     points = (
         (far_x, far_y, ORANGE),
         (near_x, near_y, PURPLE),
@@ -299,6 +307,8 @@ def main():
         text(WIDTH - RIGHT, PLOT_BOTTOM + 46, "input x", "axis-label", "end")
     )
 
+
+def draw_slope_cards(svg):
     card_y = 578
     card_gap = 12
     card_width = (PLOT_WIDTH - 2 * card_gap) / 3
@@ -341,11 +351,25 @@ def main():
             )
         )
 
+
+def write_svg(svg):
     svg.append("</svg>")
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as output_file:
         output_file.write("\n".join(svg) + "\n")
+
+
+def main():
+    verify_fixture()
+    svg = start_svg()
+
+    draw_legend_and_axes(svg)
+    draw_square_curve(svg)
+    draw_slope_lines(svg)
+    draw_labeled_points(svg)
+    draw_slope_cards(svg)
+    write_svg(svg)
 
 
 if __name__ == "__main__":

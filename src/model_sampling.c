@@ -2,6 +2,14 @@
 
 #include "model_internal.h"
 
+static float maximum_logit(const float *logits, int vocab);
+static void build_distribution(float *distribution, const float *logits,
+                               int vocab, float temperature);
+static int draw_from_distribution(const float *distribution, int vocab,
+                                  Rng *rng);
+static int sample_from_logits(Model *m, const float *logits, Rng *rng,
+                              float temperature);
+
 static float maximum_logit(const float *logits, int vocab)
 {
     float maximum = logits[0];

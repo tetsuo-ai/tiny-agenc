@@ -323,8 +323,9 @@ static uint32_t crc32_update(uint32_t crc, const unsigned char *bytes,
 {
     for (size_t i = 0; i < count; i++) {
         crc ^= bytes[i];
-        for (int bit = 0; bit < 8; bit++)
-            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        for (int bit = 0; bit < CRC32_BITS_PER_BYTE; bit++)
+            crc = (crc >> 1)
+                ^ (CRC32_POLYNOMIAL & (0u - (crc & 1u)));
     }
     return crc;
 }
@@ -333,7 +334,9 @@ static uint32_t crc32_update(uint32_t crc, const unsigned char *bytes,
 The outer loop visits each byte in order. `crc ^= bytes[i]` mixes that
 byte into the low eight bits. The inner loop advances one bit.
 
-The expression `crc & 1u` extracts the current low bit. If it is zero,
+`CRC32_BITS_PER_BYTE` is eight, and `CRC32_POLYNOMIAL` holds the
+`0xEDB88320u` pattern built above. The expression `crc & 1u` extracts
+the current low bit. If it is zero,
 `0u - 0u` is zero. If it is one, unsigned wraparound makes
 `0u - 1u` all one bits. The `&` therefore selects either zero or the
 polynomial. One source line performs the conditional XOR without an
@@ -345,8 +348,8 @@ whole file:
 ```c
 static int crc32_prefix(FILE *stream, off_t length, uint32_t *result)
 {
-    unsigned char buffer[8192];
-    uint32_t      crc = 0xFFFFFFFFu;
+    unsigned char buffer[CRC32_BUFFER_BYTES];
+    uint32_t      crc = CRC32_INITIAL;
 
     if (fseeko(stream, 0, SEEK_SET) != 0)
         return -1;
@@ -367,7 +370,8 @@ static int crc32_prefix(FILE *stream, off_t length, uint32_t *result)
 
 `off_t` is Chapter 2's file-offset type. `fseeko` first returns to byte
 zero. Each loop asks for the lesser of the remaining length and the
-8,192-byte local buffer. A short read is failure. The update continues
+8,192-byte local buffer named by `CRC32_BUFFER_BYTES`. A short read is
+failure. The update continues
 from the preceding chunk's state, so chunk boundaries do not change the
 answer. Only after exactly `length` bytes does `~crc` complement every
 bit and publish the result.
@@ -424,13 +428,13 @@ The checksum gate over that allocation is:
 ```c
 static int snapshot_checksum_matches(const char *snapshot, size_t size)
 {
-    if (size < 3 * sizeof(int32_t))
+    if (size < CHECKSUM_ENVELOPE_I32S * sizeof(int32_t))
         return 0;
 
     size_t checksum_at = size - sizeof(int32_t);
     int32_t stored;
     uint32_t computed =
-        ~crc32_update(0xFFFFFFFFu,
+        ~crc32_update(CRC32_INITIAL,
                       (const unsigned char *)snapshot, checksum_at);
 
     memcpy(&stored, snapshot + checksum_at, sizeof stored);
@@ -438,7 +442,8 @@ static int snapshot_checksum_matches(const char *snapshot, size_t size)
 }
 ```
 
-The size check proves room for magic, version, and the final checksum.
+`CHECKSUM_ENVELOPE_I32S` is three. The size check proves room for
+magic, version, and the final checksum.
 The final four bytes begin at `checksum_at`. `crc32_update` visits every
 earlier byte in the allocation, and `memcpy` reads the stored native
 integer without assuming that its address meets an integer alignment.
@@ -673,9 +678,11 @@ int param_write(const Param *p, FILE *stream)
 {
     size_t count = mat_size(p->values);
 
-    if (!values_are_finite(p))
+    if (!parameter_values_are_finite(p))
         return -1;
-    return fwrite(p->values.vals, sizeof *p->values.vals, count, stream) == count ? 0 : -1;
+    return fwrite(p->values.vals, sizeof *p->values.vals, count, stream)
+               == count
+        ? 0 : -1;
 }
 
 int param_read(Param *p, FILE *stream)
@@ -684,7 +691,7 @@ int param_read(Param *p, FILE *stream)
 
     if (fread(p->values.vals, sizeof *p->values.vals, count, stream) != count)
         return -1;
-    return values_are_finite(p) ? 0 : -1;
+    return parameter_values_are_finite(p) ? 0 : -1;
 }
 ```
 
@@ -948,7 +955,7 @@ static int prepare_temporary_checkpoint(
     if ((transaction->path.target_exists
          && apply_metadata(descriptor, &transaction->metadata) != 0)
         || (!transaction->path.target_exists
-            && fchmod(descriptor, 0600) != 0))
+            && fchmod(descriptor, PRIVATE_FILE_MODE) != 0))
         return -1;
     if (fsync(descriptor) != 0)
         return -1;

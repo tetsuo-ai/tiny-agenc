@@ -19,6 +19,11 @@ typedef struct {
     int    cols;
 } Mat;
 
+static inline Mat mat_make(float *vals, int rows, int cols);
+static inline float *mat_row(Mat m, int row);
+static inline size_t mat_size(Mat m);
+static inline Mat mat_first_rows(Mat m, int rows);
+
 static inline Mat mat_make(float *vals, int rows, int cols)
 {
     Mat m = { vals, rows, cols };

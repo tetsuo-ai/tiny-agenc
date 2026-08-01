@@ -26,9 +26,29 @@ enum {
     CHECKPOINT_HEADER_I32S = 8,
     CHECKPOINT_TOKENIZER_SIZE_I32S = 1,
     CHECKPOINT_CHECKSUM_I32S = 1,
+    CHECKSUM_ENVELOPE_I32S = 3,   /* magic, version, and checksum */
+    CRC32_BITS_PER_BYTE = 8,
+    CRC32_BUFFER_BYTES = 8192,
+    XATTR_READ_ATTEMPTS = 3,
+    FILE_PERMISSION_MASK = 07777,
+    PRIVATE_FILE_MODE = 0600,
     TEMP_RANDOM_BYTES = 16,
     TEMP_CREATE_ATTEMPTS = 16,
+    HEX_DIGITS_PER_BYTE = 2,
+    HEX_NIBBLE_BITS = 4,
+    HEX_NIBBLE_MASK = (1 << HEX_NIBBLE_BITS) - 1,
+    LOWEST_DUPLICATE_DESCRIPTOR = 0,
 };
+
+static const uint32_t CRC32_POLYNOMIAL = 0xEDB88320u;
+static const uint32_t CRC32_INITIAL = 0xFFFFFFFFu;
+
+typedef enum {
+    XATTR_REGULAR_STAGE,
+    XATTR_CAPABILITY_STAGE,
+    XATTR_SELINUX_STAGE,
+    XATTR_STAGE_COUNT,
+} XattrApplyStage;
 
 typedef struct {
     ModelMemory memory;
@@ -65,7 +85,7 @@ typedef struct {
     SavePath           path;
     CheckpointMetadata metadata;
     char                temp_name[
-        sizeof ".tiny-agenc-" + 2 * TEMP_RANDOM_BYTES];
+        sizeof ".tiny-agenc-" + HEX_DIGITS_PER_BYTE * TEMP_RANDOM_BYTES];
     int                 temp_descriptor;
     int                 temp_identity_descriptor;
     FILE               *stream;
@@ -81,6 +101,91 @@ typedef struct {
     Tokenizer *tokenizer;
     Model     *model;
 } LoadCandidate;
+
+static size_t checkpoint_fixed_bytes(void);
+static int checkpoint_layout(ModelConfig cfg, CheckpointLayout *layout);
+static uint32_t crc32_update(uint32_t crc, const unsigned char *bytes,
+                             size_t count);
+static int crc32_prefix(FILE *stream, off_t length, uint32_t *result);
+static int append_checksum(FILE *stream);
+static int snapshot_checksum_matches(const char *snapshot, size_t size);
+static int write_checkpoint_header(FILE *stream, const Model *m);
+static int write_checkpoint_parameters(FILE *stream, const Model *m);
+static int write_checkpoint(FILE *stream, const Model *m,
+                            const Tokenizer *tk);
+static char *copy_string_range(const char *text, size_t length);
+static void save_path_init(SavePath *path);
+static int split_save_path(SavePath *save_path, const char *path);
+static int stat_destination(SavePath *path);
+static int open_existing_destination(SavePath *path);
+static int prepare_save_path(SavePath *save_path, const char *path);
+static int destination_identity_matches(const SavePath *path);
+static void save_path_free(SavePath *path);
+static int xattr_is_posix_access_acl(const char *name);
+static int xattr_is_unsupported(const char *name);
+static int read_xattr_names(int descriptor, char **names, size_t *size);
+static int count_managed_xattrs(const char *names, size_t size,
+                                size_t *count);
+static int read_xattr_value(int descriptor, const char *name,
+                            void **value, size_t *size);
+static int capture_one_xattr(int descriptor, const char *name,
+                             SavedXattr *saved);
+static void free_saved_xattrs(CheckpointMetadata *metadata);
+static int capture_named_xattrs(int descriptor, const char *names,
+                                size_t names_size,
+                                CheckpointMetadata *metadata);
+static int capture_xattrs(int descriptor, CheckpointMetadata *metadata);
+static int capture_metadata(int descriptor, CheckpointMetadata *metadata);
+static const SavedXattr *find_saved_xattr(
+    const CheckpointMetadata *metadata, const char *name);
+static XattrApplyStage xattr_apply_stage(const char *name);
+static int apply_saved_xattrs(int descriptor,
+                              const CheckpointMetadata *metadata);
+static int remove_unmatched_xattrs(
+    int descriptor, const CheckpointMetadata *metadata);
+static int saved_xattr_matches(int descriptor, const SavedXattr *saved);
+static int xattrs_match(int descriptor,
+                        const CheckpointMetadata *metadata);
+static int metadata_matches(int descriptor,
+                            const CheckpointMetadata *metadata);
+static int apply_metadata(int descriptor,
+                          const CheckpointMetadata *metadata);
+static void metadata_free(CheckpointMetadata *metadata);
+static int random_bytes(unsigned char *bytes, size_t count);
+static void format_temp_name(
+    char *name, const unsigned char random[TEMP_RANDOM_BYTES]);
+static int record_temporary_identity(SaveTransaction *transaction);
+static void discard_temporary_file(SaveTransaction *transaction,
+                                   int saved_error);
+static int create_temporary_file(SaveTransaction *transaction);
+static int path_matches_temporary_file(const SaveTransaction *transaction,
+                                       const char *name);
+static void transaction_init(SaveTransaction *transaction);
+static int transaction_close_stream(SaveTransaction *transaction);
+static int prepare_transaction(SaveTransaction *transaction,
+                               const char *path);
+static int prepare_temporary_checkpoint(
+    SaveTransaction *transaction, const Model *m, const Tokenizer *tk);
+static int close_original_destination(SaveTransaction *transaction);
+static int commit_temporary_checkpoint(SaveTransaction *transaction);
+static ModelSaveResult confirm_directory_update(
+    SaveTransaction *transaction);
+static void remove_uncommitted_temporary_file(
+    SaveTransaction *transaction);
+static void transaction_cleanup(SaveTransaction *transaction);
+static int read_dimension(FILE *stream, int *value);
+static int read_config(FILE *stream, ModelConfig *cfg);
+static void load_candidate_init(LoadCandidate *candidate);
+static void load_candidate_free(LoadCandidate *candidate);
+static int load_snapshot(LoadCandidate *candidate, const char *path);
+static int snapshot_fits_resident_limit(
+    const LoadCandidate *candidate, const CheckpointLayout *layout);
+static int load_header_and_tokenizer(
+    LoadCandidate *candidate, CheckpointLayout *layout);
+static int load_checkpoint_parameters(LoadCandidate *candidate);
+static int consume_checkpoint_trailer(LoadCandidate *candidate);
+static Model *publish_load_candidate(LoadCandidate *candidate,
+                                     Tokenizer **tokenizer);
 
 static size_t checkpoint_fixed_bytes(void)
 {
@@ -122,16 +227,17 @@ static uint32_t crc32_update(uint32_t crc, const unsigned char *bytes,
 {
     for (size_t i = 0; i < count; i++) {
         crc ^= bytes[i];
-        for (int bit = 0; bit < 8; bit++)
-            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        for (int bit = 0; bit < CRC32_BITS_PER_BYTE; bit++)
+            crc = (crc >> 1)
+                ^ (CRC32_POLYNOMIAL & (0u - (crc & 1u)));
     }
     return crc;
 }
 
 static int crc32_prefix(FILE *stream, off_t length, uint32_t *result)
 {
-    unsigned char buffer[8192];
-    uint32_t      crc = 0xFFFFFFFFu;
+    unsigned char buffer[CRC32_BUFFER_BYTES];
+    uint32_t      crc = CRC32_INITIAL;
 
     if (fseeko(stream, 0, SEEK_SET) != 0)
         return -1;
@@ -167,13 +273,13 @@ static int append_checksum(FILE *stream)
 
 static int snapshot_checksum_matches(const char *snapshot, size_t size)
 {
-    if (size < 3 * sizeof(int32_t))
+    if (size < CHECKSUM_ENVELOPE_I32S * sizeof(int32_t))
         return 0;
 
     size_t checksum_at = size - sizeof(int32_t);
     int32_t stored;
     uint32_t computed =
-        ~crc32_update(0xFFFFFFFFu,
+        ~crc32_update(CRC32_INITIAL,
                       (const unsigned char *)snapshot, checksum_at);
 
     memcpy(&stored, snapshot + checksum_at, sizeof stored);
@@ -238,9 +344,11 @@ static int split_save_path(SavePath *save_path, const char *path)
         return -1;
 
     if (slash == NULL)
-        save_path->directory_name = copy_string_range(".", 1);
+        save_path->directory_name =
+            copy_string_range(".", sizeof "." - 1);
     else if (slash == path)
-        save_path->directory_name = copy_string_range("/", 1);
+        save_path->directory_name =
+            copy_string_range("/", sizeof "/" - 1);
     else
         save_path->directory_name =
             copy_string_range(path, (size_t)(slash - path));
@@ -339,7 +447,7 @@ static int read_xattr_names(int descriptor, char **names, size_t *size)
     *names = NULL;
     *size = 0;
 
-    for (int attempt = 0; attempt < 3; attempt++) {
+    for (int attempt = 0; attempt < XATTR_READ_ATTEMPTS; attempt++) {
         ssize_t wanted = flistxattr(descriptor, NULL, 0);
 
         if (wanted < 0)
@@ -388,7 +496,7 @@ static int count_managed_xattrs(const char *names, size_t size,
 static int read_xattr_value(int descriptor, const char *name,
                             void **value, size_t *size)
 {
-    for (int attempt = 0; attempt < 3; attempt++) {
+    for (int attempt = 0; attempt < XATTR_READ_ATTEMPTS; attempt++) {
         ssize_t wanted = fgetxattr(descriptor, name, NULL, 0);
 
         if (wanted < 0)
@@ -445,16 +553,16 @@ static int capture_named_xattrs(int descriptor, const char *names,
         const char *name = names + position;
         size_t length = strlen(name);
 
-        if (!xattr_is_posix_access_acl(name)) {
-            if (capture_one_xattr(descriptor, name,
-                                  &metadata->xattrs[saved]) != 0) {
-                metadata->xattr_count = saved;
-                free_saved_xattrs(metadata);
-                return -1;
-            }
-            saved++;
-        }
         position += length + 1;
+        if (xattr_is_posix_access_acl(name))
+            continue;
+        if (capture_one_xattr(descriptor, name,
+                              &metadata->xattrs[saved]) != 0) {
+            metadata->xattr_count = saved;
+            free_saved_xattrs(metadata);
+            return -1;
+        }
+        saved++;
     }
     metadata->xattr_count = saved;
     return 0;
@@ -491,7 +599,7 @@ static int capture_metadata(int descriptor,
         return -1;
     metadata->uid = status.st_uid;
     metadata->gid = status.st_gid;
-    metadata->mode = status.st_mode & 07777;
+    metadata->mode = status.st_mode & FILE_PERMISSION_MASK;
     metadata->access_acl = acl_get_fd(descriptor);
     if (metadata->access_acl == NULL)
         return -1;
@@ -508,19 +616,20 @@ static const SavedXattr *find_saved_xattr(
     return NULL;
 }
 
-static int xattr_apply_stage(const char *name)
+static XattrApplyStage xattr_apply_stage(const char *name)
 {
     if (strcmp(name, "security.capability") == 0)
-        return 1;
+        return XATTR_CAPABILITY_STAGE;
     if (strcmp(name, "security.selinux") == 0)
-        return 2;
-    return 0;
+        return XATTR_SELINUX_STAGE;
+    return XATTR_REGULAR_STAGE;
 }
 
 static int apply_saved_xattrs(int descriptor,
                               const CheckpointMetadata *metadata)
 {
-    for (int stage = 0; stage < 3; stage++) {
+    for (XattrApplyStage stage = XATTR_REGULAR_STAGE;
+         stage < XATTR_STAGE_COUNT; stage++) {
         for (size_t i = 0; i < metadata->xattr_count; i++) {
             const SavedXattr *xattr = &metadata->xattrs[i];
 
@@ -611,7 +720,7 @@ static int metadata_matches(int descriptor,
     if (fstat(descriptor, &status) != 0
         || status.st_uid != metadata->uid
         || status.st_gid != metadata->gid
-        || (status.st_mode & 07777) != metadata->mode)
+        || (status.st_mode & FILE_PERMISSION_MASK) != metadata->mode)
         return 0;
 
     access_acl = acl_get_fd(descriptor);
@@ -670,10 +779,44 @@ static void format_temp_name(char *name,
 
     memcpy(name, PREFIX, prefix_length);
     for (size_t i = 0; i < TEMP_RANDOM_BYTES; i++) {
-        name[prefix_length + 2 * i] = HEX[random[i] >> 4];
-        name[prefix_length + 2 * i + 1] = HEX[random[i] & 15];
+        name[prefix_length + HEX_DIGITS_PER_BYTE * i] =
+            HEX[random[i] >> HEX_NIBBLE_BITS];
+        name[prefix_length + HEX_DIGITS_PER_BYTE * i + 1] =
+            HEX[random[i] & HEX_NIBBLE_MASK];
     }
-    name[prefix_length + 2 * TEMP_RANDOM_BYTES] = '\0';
+    name[prefix_length + HEX_DIGITS_PER_BYTE * TEMP_RANDOM_BYTES] = '\0';
+}
+
+static int record_temporary_identity(SaveTransaction *transaction)
+{
+    transaction->temp_identity_descriptor =
+        fcntl(transaction->temp_descriptor, F_DUPFD_CLOEXEC,
+              LOWEST_DUPLICATE_DESCRIPTOR);
+    if (transaction->temp_identity_descriptor < 0)
+        return -1;
+    if (fstat(transaction->temp_identity_descriptor,
+              &transaction->temp_stat) != 0)
+        return -1;
+    if (!S_ISREG(transaction->temp_stat.st_mode)) {
+        errno = EINVAL;
+        return -1;
+    }
+    transaction->has_temp_identity = 1;
+    return 0;
+}
+
+static void discard_temporary_file(SaveTransaction *transaction,
+                                   int saved_error)
+{
+    if (transaction->temp_identity_descriptor >= 0)
+        close(transaction->temp_identity_descriptor);
+    transaction->temp_identity_descriptor = -1;
+
+    unlinkat(transaction->path.directory, transaction->temp_name, 0);
+    close(transaction->temp_descriptor);
+    transaction->temp_descriptor = -1;
+    transaction->temp_name[0] = '\0';
+    errno = saved_error;
 }
 
 static int create_temporary_file(SaveTransaction *transaction)
@@ -686,32 +829,20 @@ static int create_temporary_file(SaveTransaction *transaction)
         format_temp_name(transaction->temp_name, random);
         transaction->temp_descriptor =
             openat(transaction->path.directory, transaction->temp_name,
-                   O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-        if (transaction->temp_descriptor >= 0) {
-            transaction->temp_identity_descriptor =
-                fcntl(transaction->temp_descriptor, F_DUPFD_CLOEXEC, 0);
-            if (transaction->temp_identity_descriptor < 0
-                || fstat(transaction->temp_identity_descriptor,
-                         &transaction->temp_stat) != 0
-                || !S_ISREG(transaction->temp_stat.st_mode)) {
-                int saved_error = errno;
-
-                if (transaction->temp_identity_descriptor >= 0)
-                    close(transaction->temp_identity_descriptor);
-                transaction->temp_identity_descriptor = -1;
-                unlinkat(transaction->path.directory,
-                         transaction->temp_name, 0);
-                close(transaction->temp_descriptor);
-                transaction->temp_descriptor = -1;
-                transaction->temp_name[0] = '\0';
-                errno = saved_error;
-                return -1;
-            }
-            transaction->has_temp_identity = 1;
-            return 0;
-        }
-        if (errno != EEXIST)
+                   O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC,
+                   PRIVATE_FILE_MODE);
+        if (transaction->temp_descriptor < 0) {
+            if (errno == EEXIST)
+                continue;
             return -1;
+        }
+        if (record_temporary_identity(transaction) == 0)
+            return 0;
+
+        int saved_error = errno;
+
+        discard_temporary_file(transaction, saved_error);
+        return -1;
     }
     return -1;
 }
@@ -791,7 +922,7 @@ static int prepare_temporary_checkpoint(
     if ((transaction->path.target_exists
          && apply_metadata(descriptor, &transaction->metadata) != 0)
         || (!transaction->path.target_exists
-            && fchmod(descriptor, 0600) != 0))
+            && fchmod(descriptor, PRIVATE_FILE_MODE) != 0))
         return -1;
     if (fsync(descriptor) != 0)
         return -1;
@@ -853,20 +984,24 @@ static ModelSaveResult confirm_directory_update(
         : MODEL_SAVE_DURABLE;
 }
 
+static void remove_uncommitted_temporary_file(
+    SaveTransaction *transaction)
+{
+    if (transaction->renamed || transaction->temp_name[0] == '\0'
+        || transaction->path.directory < 0)
+        return;
+    if (!path_matches_temporary_file(transaction, transaction->temp_name))
+        return;
+    unlinkat(transaction->path.directory, transaction->temp_name, 0);
+}
+
 static void transaction_cleanup(SaveTransaction *transaction)
 {
     if (transaction->stream != NULL)
         fclose(transaction->stream);
     else if (transaction->temp_descriptor >= 0)
         close(transaction->temp_descriptor);
-    if (!transaction->renamed && transaction->temp_name[0] != '\0'
-        && transaction->path.directory >= 0) {
-        if (path_matches_temporary_file(transaction,
-                                        transaction->temp_name)) {
-            unlinkat(transaction->path.directory,
-                     transaction->temp_name, 0);
-        }
-    }
+    remove_uncommitted_temporary_file(transaction);
     if (transaction->temp_identity_descriptor >= 0)
         close(transaction->temp_identity_descriptor);
     metadata_free(&transaction->metadata);

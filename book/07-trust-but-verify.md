@@ -567,7 +567,8 @@ static void nudge_all(const char *label, Mat target, Mat analytic,
         float below = measure(context);
 
         target.vals[i] = saved;
-        compare(label, analytic.vals[i], (above - below) / (2.0f * NUDGE));
+        compare(label, analytic.vals[i],
+                (above - below) / (CENTRAL_DIFFERENCE_SPAN * NUDGE));
     }
 }
 ```
@@ -581,7 +582,8 @@ address to pass back to that callback.
 The loop visits every target entry. `mat_size(target)` supplies its
 flattened element count. A one-element spot check could miss a wrong
 row index or a failed accumulation path; this loop gives each entry a
-turn.
+turn. `CENTRAL_DIFFERENCE_SPAN` names the `2` from the denominator
+built above.
 
 `saved` captures the exact original `float`. Assigning through
 `target.vals[i]` changes the borrowed backing storage seen by the

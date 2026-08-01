@@ -166,7 +166,7 @@ def inset_y(loss):
     )
 
 
-def main():
+def prepare_plot_data():
     reports = read_log()
     report_by_step = dict(reports)
     points = [
@@ -198,7 +198,11 @@ def main():
         for x, y in inset_points
     )
 
-    svg = [
+    return report_by_step, points, inset_points
+
+
+def start_svg():
+    return [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" '
@@ -302,6 +306,8 @@ def main():
         ),
     ]
 
+
+def draw_main_plot(svg, points, report_by_step):
     for loss in (0.5, 1.0, 2.0, 3.0, 4.0, 4.5):
         y = plot_y(loss)
         svg.append(line(LEFT, y, WIDTH - RIGHT, y, "grid"))
@@ -356,6 +362,8 @@ def main():
             )
         )
 
+
+def draw_inset_selection(svg):
     selection_x = plot_x(INSET_FIRST_STEP)
     selection_y = plot_y(INSET_Y_MAX)
     selection_width = (
@@ -384,6 +392,8 @@ def main():
         )
     )
 
+
+def draw_inset_frame(svg):
     svg.append(
         rect(
             INSET_LEFT,
@@ -405,6 +415,8 @@ def main():
         )
     )
 
+
+def draw_inset_grid(svg):
     for loss in (0.70, 0.80, 0.90):
         y = inset_y(loss)
         svg.append(
@@ -446,6 +458,8 @@ def main():
             )
         )
 
+
+def draw_inset_curve(svg, inset_points, report_by_step):
     svg.append(polyline(inset_points, "inset-curve"))
     for x, y in inset_points:
         svg.append(
@@ -461,6 +475,8 @@ def main():
             f'fill="{PANEL}" stroke="{GREEN}" stroke-width="2"/>'
         )
 
+
+def finish_svg(svg):
     svg.extend(
         (
             text(
@@ -504,9 +520,23 @@ def main():
         )
     )
 
+
+def write_svg(svg):
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as output:
         output.write("\n".join(svg) + "\n")
+
+
+def main():
+    report_by_step, points, inset_points = prepare_plot_data()
+    svg = start_svg()
+    draw_main_plot(svg, points, report_by_step)
+    draw_inset_selection(svg)
+    draw_inset_frame(svg)
+    draw_inset_grid(svg)
+    draw_inset_curve(svg, inset_points, report_by_step)
+    finish_svg(svg)
+    write_svg(svg)
 
 
 if __name__ == "__main__":

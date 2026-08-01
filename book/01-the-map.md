@@ -593,14 +593,15 @@ This is the exact controlling line from
 [`attention_head_forward`](../src/ops.c):
 
 ```c
-for (int t2 = 0; t2 <= t; t2++)
+for (int source = 0; source <= time_index; source++)
 ```
 
-Read its three clauses from left to right. `int t2 = 0` creates an
-integer counter at the first position. `t2 <= t` permits the loop body
-while the position being consulted is no later than the position
-asking. `t2++` advances the counter after each visit. Once `t2`
-becomes `t + 1`, the middle test rejects it. In this source,
+Read its three clauses from left to right. `int source = 0` creates an
+integer counter at the first position. `source <= time_index` permits
+the loop body while the position being consulted is no later than the
+position asking. `source++` advances the counter after each visit. Once
+`source` becomes `time_index + 1`, the middle test rejects it. In this
+source,
 causality is a loop bound.
 
 The consultation happens in several channel groups side by side.

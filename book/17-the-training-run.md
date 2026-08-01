@@ -197,28 +197,39 @@ The repository's evaluator is
 [`tests/bigram.c`](../tests/bigram.c). It measures a fixed rule; it
 does not change transformer parameters.
 
-The first shortened excerpt builds the vocabulary and count sheets:
+The count sheets travel in one record:
 
 ```c
-unsigned long long pair[BYTE_VALUES][BYTE_VALUES] = { 0 };
-unsigned long long previous[BYTE_VALUES] = { 0 };
-int seen[BYTE_VALUES] = { 0 };
-int vocab_size = 0;
+typedef struct {
+    unsigned long long pair[BYTE_VALUES][BYTE_VALUES];
+    unsigned long long previous[BYTE_VALUES];
+    int                seen[BYTE_VALUES];
+    int                vocab_size;
+} BigramCounts;
+```
 
-for (size_t i = 0; i < train_length; i++) {
-    unsigned char byte = (unsigned char)train[i];
+One small helper fills it from training text:
 
-    if (!seen[byte]) {
-        seen[byte] = 1;
-        vocab_size++;
+```c
+static void count_training_bigrams(BigramCounts *counts, const char *train,
+                                   size_t train_length)
+{
+    for (size_t i = 0; i < train_length; i++) {
+        unsigned char byte = (unsigned char)train[i];
+
+        if (counts->seen[byte])
+            continue;
+        counts->seen[byte] = 1;
+        counts->vocab_size++;
     }
-}
-for (size_t i = 0; i + 1 < train_length; i++) {
-    unsigned char a = (unsigned char)train[i];
-    unsigned char b = (unsigned char)train[i + 1];
+    for (size_t i = 0; i + NEXT_BYTE_OFFSET < train_length; i++) {
+        unsigned char a = (unsigned char)train[i];
+        unsigned char b =
+            (unsigned char)train[i + NEXT_BYTE_OFFSET];
 
-    pair[a][b]++;
-    previous[a]++;
+        counts->pair[a][b]++;
+        counts->previous[a]++;
+    }
 }
 ```
 
@@ -226,17 +237,18 @@ The file sets `BYTE_VALUES` to 256 because one byte has 256 possible
 bit patterns. `pair` is therefore a 256-by-256 array. Row `a`, column
 `b` stores how often `b` followed `a`.
 `previous[a]` stores the total number of recorded successors after
-`a`. The `{ 0 }` initializers start every count and flag at zero.
+`a`. The caller's `{ 0 }` initializer starts every count and flag at
+zero.
 
 The first loop walks training bytes only. Chapter 3 introduced the
 `unsigned char` cast that turns a possibly signed plain `char` into a
-safe array index from 0 through 255. The `seen` flag makes
-`vocab_size++` run only on the first occurrence of each byte.
+safe array index from 0 through 255. A seen byte takes the `continue`
+guard back to the top. Only a new byte reaches `vocab_size++`.
 
-The second loop stops while `i + 1 < train_length`, because the final
-byte has no next byte inside the array. It reads one adjacent pair,
-increments that cell, and increments the row total. No validation byte
-has entered either table.
+`NEXT_BYTE_OFFSET` is one. The second loop stops while the next-byte
+index remains inside the array, because the final byte has no next byte.
+It reads one adjacent pair, increments that cell, and increments the row
+total. No validation byte has entered either table.
 
 The complete scoring helper applies the construction above:
 
@@ -247,16 +259,17 @@ static double transition_loss(
     int vocab_size, unsigned char a, unsigned char b)
 {
     double probability =
-        ((double)pair[a][b] + 1.0)
+        ((double)pair[a][b] + ADD_ONE_PSEUDOCOUNT)
         / ((double)previous[a] + (double)vocab_size);
 
     return -log(probability);
 }
 ```
 
-The numerator converts the observed pair count to `double`, then adds
-one. The denominator converts the row total and adds one provisional
-count for each of the `vocab_size` legal next bytes. Summing the
+`ADD_ONE_PSEUDOCOUNT` names the value `1.0`. The numerator converts the
+observed pair count to `double`, then adds that provisional count. The
+denominator converts the row total and adds one provisional count for
+each of the `vocab_size` legal next bytes. Summing the
 numerators for those seen vocabulary bytes therefore reproduces the
 denominator.
 
@@ -265,30 +278,38 @@ the same natural-log penalty as the transformer loss. With this
 repository's million-byte corpus, converting the integer counts to
 `double` preserves their exact values before division.
 
-The full-file grading loop is also built only from training counts:
+The full-file grading helper is also built only from training counts:
 
 ```c
-double total_loss = 0.0;
-size_t predictions = 0;
+static LossMeasurement measure_full_validation(
+    const BigramCounts *counts, const char *validation,
+    size_t validation_length)
+{
+    double total_loss = 0.0;
+    size_t predictions = 0;
 
-for (size_t i = 0; i + 1 < validation_length; i++) {
-    unsigned char a = (unsigned char)validation[i];
-    unsigned char b = (unsigned char)validation[i + 1];
+    for (size_t i = 0; i + NEXT_BYTE_OFFSET < validation_length; i++) {
+        unsigned char a = (unsigned char)validation[i];
+        unsigned char b =
+            (unsigned char)validation[i + NEXT_BYTE_OFFSET];
 
-    if (!seen[a] || !seen[b])
-        die("validation corpus contains a byte absent from training");
+        if (!counts->seen[a] || !counts->seen[b])
+            die("validation corpus contains a byte absent from training");
 
-    total_loss += transition_loss(pair, previous, vocab_size, a, b);
-    predictions++;
+        total_loss += transition_loss(counts->pair, counts->previous,
+                                      counts->vocab_size, a, b);
+        predictions++;
+    }
+
+    if (predictions == 0)
+        die("validation corpus has no next-byte predictions");
+    LossMeasurement measurement = {
+        .loss = total_loss / (double)predictions,
+        .predictions = predictions,
+    };
+
+    return measurement;
 }
-
-if (predictions == 0)
-    die("validation corpus has no next-byte predictions");
-if (validation_length <= VALIDATION_BLOCK_SIZE
-    || validation_length > (size_t)INT_MAX)
-    die("validation corpus cannot supply the default fixed windows");
-
-double full_loss = total_loss / (double)predictions;
 ```
 
 Each loop iteration grades one adjacent validation pair. Validation
@@ -305,11 +326,11 @@ last has a successor, so this pass grades:
 
 The final division turns their accumulated penalties into one mean.
 `predictions == 0` prevents that division from using zero as its
-denominator. `validation_length <= VALIDATION_BLOCK_SIZE` means the
-file cannot supply 128 inputs plus their following answer.
-`validation_length > INT_MAX` applies a conservative whole-file rule:
-requiring the full length to fit in `int` guarantees that the later,
-smaller `rng_below` bound also fits.
+denominator. The helper returns both the mean and its denominator in a
+`LossMeasurement`, so printing cannot accidentally pair a loss with a
+different prediction count. The fixed-window helper below separately
+checks that the file can supply 128 inputs and following answers and
+that its draw bound fits in `int`.
 
 ## Reproduce the fixed questions
 
@@ -326,6 +347,7 @@ enum {
     VALIDATION_BATCHES = TINY_AGENC_VALIDATION_BATCHES,
     VALIDATION_BATCH_SIZE = TINY_AGENC_DEFAULT_BATCH_SIZE,
     VALIDATION_BLOCK_SIZE = TINY_AGENC_DEFAULT_BLOCK_SIZE,
+    NEXT_BYTE_OFFSET = 1,
 };
 
 static const unsigned long long VALIDATION_SEED =
@@ -333,50 +355,60 @@ static const unsigned long long VALIDATION_SEED =
 ```
 
 The first enum entry sizes the raw-byte tables. The next three entries
-copy the shared batch count, row count, and row length. The final
-declaration copies the shared seed into the type accepted by
-`rng_new`.
+copy the shared batch count, row count, and row length. The final enum
+entry names the one-byte distance between a question and its answer.
+The declaration below the enum copies the shared seed into the type
+accepted by `rng_new`.
 
 This shortened excerpt reproduces the window draw:
 
 ```c
-size_t last_start = validation_length - VALIDATION_BLOCK_SIZE - 1;
+size_t last_start =
+    validation_length - VALIDATION_BLOCK_SIZE - NEXT_BYTE_OFFSET;
 Rng *rng = rng_new(VALIDATION_SEED);
-double sampled_total = 0.0;
-size_t sampled_predictions = 0;
+LossMeasurement measurement = { 0 };
 
 for (int batch = 0; batch < VALIDATION_BATCHES; batch++) {
     for (int row = 0; row < VALIDATION_BATCH_SIZE; row++) {
         size_t start = (size_t)rng_below(
-            rng, (int)(last_start + 1));
+            rng, (int)(last_start + NEXT_BYTE_OFFSET));
 
-        for (int time = 0; time < VALIDATION_BLOCK_SIZE; time++) {
-            unsigned char a = (unsigned char)validation[start + (size_t)time];
-            unsigned char b =
-                (unsigned char)validation[start + (size_t)time + 1];
-
-            sampled_total +=
-                transition_loss(pair, previous, vocab_size, a, b);
-            sampled_predictions++;
-        }
+        measure_validation_window(counts, validation, start,
+                                  &measurement);
     }
 }
 rng_free(rng);
-
-double sampled_loss = sampled_total / (double)sampled_predictions;
+measurement.loss /= (double)measurement.predictions;
 ```
 
 `last_start` is the final index with 128 inputs and 128 following
-answers available. Adding one gives `rng_below` the number of legal
-starts. Chapter 3 established that these starts are
+answers available. Adding `NEXT_BYTE_OFFSET`, which is one, gives
+`rng_below` the number of legal starts. Chapter 3 established that
+these starts are
 [sampled with replacement](03-data.md#draw-every-legal-start), so two
 rows may grade the same position.
 
-The loops preserve the transformer's order: four batches, then 32
-rows, then 128 time positions. The inner loop reads the preceding byte
-and its known answer, applies the count rule, and increments the number
-of graded slots. The final mean is therefore weighted exactly like the
-four equal-sized transformer batches.
+The loops preserve the transformer's outer order: four batches, then 32
+rows. `measure_validation_window` owns the remaining 128-position loop:
+
+```c
+for (int time = 0; time < VALIDATION_BLOCK_SIZE; time++) {
+    size_t at = start + (size_t)time;
+    unsigned char previous = (unsigned char)validation[at];
+    unsigned char next =
+        (unsigned char)validation[at + NEXT_BYTE_OFFSET];
+
+    measurement->loss +=
+        transition_loss(counts->pair, counts->previous,
+                        counts->vocab_size, previous, next);
+    measurement->predictions++;
+}
+```
+
+It reads the preceding byte and its known answer, applies the count
+rule, and increments the number of graded slots. The final mean is
+therefore weighted exactly like the four equal-sized transformer
+batches.
 
 Both executables include [`evaluation.h`](../src/evaluation.h), whose
 shared comparison policy is:
@@ -476,13 +508,13 @@ mean:
 
 ```c
 printf("bigram: uniform loss %.6f | full-file add-one loss %.6f | perplexity %.4f\n",
-       log((double)vocab_size), full_loss, exp(full_loss));
+       log((double)counts->vocab_size), full.loss, exp(full.loss));
 printf("bigram: fixed-window add-one loss %.6f | perplexity %.4f\n",
-       sampled_loss, exp(sampled_loss));
+       fixed.loss, exp(fixed.loss));
 ```
 
-`log((double)vocab_size)` is the uniform loss. `exp(full_loss)` and
-`exp(sampled_loss)` rescale the two bigram grades without changing
+`log((double)counts->vocab_size)` is the uniform loss. `exp(full.loss)`
+and `exp(fixed.loss)` rescale the two bigram grades without changing
 which is lower.
 
 ## Compare the same questions

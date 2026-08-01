@@ -48,6 +48,35 @@ typedef struct {
     ModelSaveResult expected;
 } FailureCase;
 
+typedef struct {
+    char metadata[PATH_MAX];
+    char snapshot[PATH_MAX];
+    char registry[PATH_MAX];
+    char identity[PATH_MAX];
+    char golden[PATH_MAX];
+    char fmemopen[PATH_MAX];
+} CheckpointFailurePaths;
+
+enum {
+    FILE_PERMISSION_MASK = 07777,
+    PRIVATE_FILE_MODE = 0600,
+    TEST_METADATA_MODE = 06740,
+    PRIVATE_DIRECTORY_MODE = 0700,
+    FAILURE_MESSAGE_CAPACITY = 160,
+    XATTR_VALUE_CAPACITY = 32,
+    EXPECTED_INJECTION_HITS = 1,
+    DESTINATION_AND_FOREIGN_ENTRIES = 2,
+    FOREIGN_ENTRY_COUNT = 1,
+    BLOCK_ALL_PERMISSION_BITS = 0777,
+    GOLDEN_VALUE_PERIOD = 17,
+    GOLDEN_VALUE_CENTER = 8,
+    GOLDEN_PARAMETER_SCALARS = 20,
+};
+
+static const unsigned long long FIXTURE_MODEL_SEED = 2026;
+static const unsigned long long GOLDEN_MODEL_SEED = 1337;
+static const float GOLDEN_VALUE_SCALE = 0.125f;
+
 static const unsigned char OLD_BYTES[] = {
     'o', 'l', 'd', ' ', 'c', 'h', 'e', 'c', 'k', 'p', 'o', 'i', 'n', 't',
 };
@@ -73,8 +102,6 @@ static char      displaced_temp_path[PATH_MAX];
 static int       failures;
 static int       checks;
 
-static int swap_temporary_entry(void);
-
 extern int   __real_acl_set_fd(int descriptor, acl_t acl);
 extern int   __real_acl_cmp(acl_t first, acl_t second);
 extern int   __real_close(int descriptor);
@@ -91,6 +118,69 @@ extern int   __real_renameat(int old_directory, const char *old_path,
 extern int   __real_renameat2(int old_directory, const char *old_path,
                               int new_directory, const char *new_path,
                               unsigned int flags);
+
+static int injected_failure(void);
+int __wrap_acl_set_fd(int descriptor, acl_t acl);
+int __wrap_acl_cmp(acl_t first, acl_t second);
+int __wrap_close(int descriptor);
+int __wrap_fchmod(int descriptor, mode_t mode);
+int __wrap_fchown(int descriptor, uid_t owner, gid_t group);
+int __wrap_fflush(FILE *stream);
+int __wrap_fclose(FILE *stream);
+static int overwrite_with_corruption(const char *path);
+FILE *__wrap_fmemopen(void *buffer, size_t size, const char *mode);
+int __wrap_fsetxattr(int descriptor, const char *name, const void *value,
+                     size_t size, int flags);
+int __wrap_fsync(int descriptor);
+int __wrap_renameat(int old_directory, const char *old_path, int new_directory,
+                    const char *new_path);
+int __wrap_renameat2(int old_directory, const char *old_path,
+                     int new_directory, const char *new_path,
+                     unsigned int flags);
+static void expect(int condition, const char *message);
+static int join_path(char *result, size_t capacity, const char *directory,
+                     const char *name);
+static int replace_with_bytes(const char *path, const unsigned char *bytes,
+                              size_t size);
+static int find_temporary_entry_name(char *name, size_t capacity);
+static int swap_temporary_entry(void);
+static int file_equals(const char *path, const unsigned char *bytes,
+                       size_t size);
+static int set_test_acl(const char *path);
+static int set_test_metadata(const char *path);
+static int xattr_equals(const char *path, const char *name,
+                        const unsigned char *expected, size_t expected_size);
+static int directory_entry_count(const char *path);
+static Fixture fixture_new(void);
+static void fixture_free(Fixture fixture);
+static int checkpoint_loads(const char *path);
+static void check_metadata_round_trip(Fixture fixture, const char *path);
+static void check_rejected_destinations(Fixture fixture,
+                                        const char *directory);
+static void start_injection(Injection injection);
+static int prepare_failure_destination(const char *path);
+static void check_injected_failure_case(Fixture fixture,
+                                        const FailureCase *failure_case,
+                                        const char *path,
+                                        const char *directory,
+                                        const char *foreign);
+static void check_absent_rename_failure(Fixture fixture,
+                                        const char *path,
+                                        const char *directory,
+                                        const char *foreign);
+static void check_injected_save_failures(Fixture fixture,
+                                         const char *directory);
+static void check_immutable_load_snapshot(Fixture fixture, const char *path);
+static void check_fmemopen_failure(Fixture fixture, const char *path);
+static void check_registry_preflight(Fixture fixture, const char *path);
+static void check_temporary_identity(Fixture fixture, const char *directory,
+                                     const char *path);
+static uint64_t fnv1a64(const unsigned char *bytes, size_t size);
+static int golden_native_format_matches(void);
+static void check_writer_golden(const char *path);
+static int checkpoint_failure_paths(const char *directory,
+                                    CheckpointFailurePaths *paths);
+int main(void);
 
 static int injected_failure(void)
 {
@@ -260,7 +350,8 @@ static int replace_with_bytes(const char *path, const unsigned char *bytes,
         return -1;
 
     int descriptor =
-        open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
+             PRIVATE_FILE_MODE);
 
     if (descriptor < 0)
         return -1;
@@ -270,7 +361,7 @@ static int replace_with_bytes(const char *path, const unsigned char *bytes,
     return written == (ssize_t)size && !close_failed ? 0 : -1;
 }
 
-static int swap_temporary_entry(void)
+static int find_temporary_entry_name(char *name, size_t capacity)
 {
     static const char PREFIX[] = ".tiny-agenc-";
     DIR *directory = opendir(mutation_directory);
@@ -278,22 +369,29 @@ static int swap_temporary_entry(void)
     if (directory == NULL)
         return -1;
 
-    char name[NAME_MAX + 1] = { 0 };
     struct dirent *entry;
 
     while ((entry = readdir(directory)) != NULL) {
-        if (strncmp(entry->d_name, PREFIX, sizeof PREFIX - 1) == 0) {
-            size_t length = strlen(entry->d_name);
+        if (strncmp(entry->d_name, PREFIX, sizeof PREFIX - 1) != 0)
+            continue;
 
-            if (length >= sizeof name) {
-                closedir(directory);
-                return -1;
-            }
-            memcpy(name, entry->d_name, length + 1);
-            break;
+        size_t length = strlen(entry->d_name);
+
+        if (length >= capacity) {
+            closedir(directory);
+            return -1;
         }
+        memcpy(name, entry->d_name, length + 1);
+        break;
     }
-    if (closedir(directory) != 0 || name[0] == '\0'
+    return closedir(directory) == 0 && name[0] != '\0' ? 0 : -1;
+}
+
+static int swap_temporary_entry(void)
+{
+    char name[NAME_MAX + 1] = { 0 };
+
+    if (find_temporary_entry_name(name, sizeof name) != 0
         || join_path(swapped_temp_path, sizeof swapped_temp_path,
                      mutation_directory, name) != 0
         || join_path(displaced_temp_path, sizeof displaced_temp_path,
@@ -326,7 +424,7 @@ static int file_equals(const char *path, const unsigned char *bytes,
 
 static int set_test_acl(const char *path)
 {
-    char text[160];
+    char text[FAILURE_MESSAGE_CAPACITY];
     unsigned long named_user = (unsigned long)getuid() + 1UL;
     int length = snprintf(text, sizeof text,
                           "user::rwx,user:%lu:r--,group::r--,"
@@ -348,7 +446,7 @@ static int set_test_acl(const char *path)
 
 static int set_test_metadata(const char *path)
 {
-    if (set_test_acl(path) != 0 || chmod(path, 06740) != 0)
+    if (set_test_acl(path) != 0 || chmod(path, TEST_METADATA_MODE) != 0)
         return -1;
     if (setxattr(path, EMPTY_XATTR_NAME, "", 0, 0) != 0)
         return -1;
@@ -359,7 +457,7 @@ static int set_test_metadata(const char *path)
 static int xattr_equals(const char *path, const char *name,
                         const unsigned char *expected, size_t expected_size)
 {
-    unsigned char buffer[32];
+    unsigned char buffer[XATTR_VALUE_CAPACITY];
     ssize_t received = getxattr(path, name, buffer, sizeof buffer);
 
     return received == (ssize_t)expected_size
@@ -400,7 +498,7 @@ static Fixture fixture_new(void)
         .layer_count = 1,
         .batch_size  = 1,
     };
-    fixture.model = model_new(config, 2026);
+    fixture.model = model_new(config, FIXTURE_MODEL_SEED);
     return fixture;
 }
 
@@ -425,7 +523,7 @@ static int checkpoint_loads(const char *path)
 
 static void check_metadata_round_trip(Fixture fixture, const char *path)
 {
-    mode_t previous_mask = umask(0777);
+    mode_t previous_mask = umask(BLOCK_ALL_PERMISSION_BITS);
     ModelSaveResult created_result =
         model_save_durable(fixture.model, fixture.tokenizer, path);
     umask(previous_mask);
@@ -435,7 +533,9 @@ static void check_metadata_round_trip(Fixture fixture, const char *path)
 
     struct stat created;
 
-    expect(stat(path, &created) == 0 && (created.st_mode & 07777) == 0600,
+    expect(stat(path, &created) == 0
+               && (created.st_mode & FILE_PERMISSION_MASK)
+                      == PRIVATE_FILE_MODE,
            "a new checkpoint has mode 0600 independent of umask");
     expect(checkpoint_loads(path),
            "the explicitly readable new checkpoint loads");
@@ -455,7 +555,8 @@ static void check_metadata_round_trip(Fixture fixture, const char *path)
     acl_t actual_acl = acl_get_file(path, ACL_TYPE_ACCESS);
 
     expect(stat(path, &after) == 0
-               && (after.st_mode & 07777) == (before.st_mode & 07777),
+               && (after.st_mode & FILE_PERMISSION_MASK)
+                      == (before.st_mode & FILE_PERMISSION_MASK),
            "checkpoint replacement preserves all mode bits");
     expect(after.st_uid == before.st_uid && after.st_gid == before.st_gid,
            "checkpoint replacement preserves owner and group");
@@ -506,7 +607,7 @@ static void check_rejected_destinations(Fixture fixture,
                && S_ISLNK(link_status.st_mode)
                && file_equals(target, OLD_BYTES, sizeof OLD_BYTES),
            "rejected symlink leaves its target untouched");
-    expect(mkfifo(fifo_path, 0600) == 0,
+    expect(mkfifo(fifo_path, PRIVATE_FILE_MODE) == 0,
            "FIFO destination fixture is ready");
     expect(model_save_durable(fixture.model, fixture.tokenizer, fifo_path)
                == MODEL_SAVE_NOT_COMMITTED,
@@ -517,7 +618,7 @@ static void check_rejected_destinations(Fixture fixture,
     expect(lstat(fifo_path, &fifo_status) == 0
                && S_ISFIFO(fifo_status.st_mode),
            "rejected FIFO remains a FIFO");
-    expect(mkdir(directory_path, 0700) == 0,
+    expect(mkdir(directory_path, PRIVATE_DIRECTORY_MODE) == 0,
            "directory destination fixture is ready");
     expect(model_save_durable(fixture.model, fixture.tokenizer, directory_path)
                == MODEL_SAVE_NOT_COMMITTED,
@@ -546,6 +647,67 @@ static int prepare_failure_destination(const char *path)
 {
     return replace_with_bytes(path, OLD_BYTES, sizeof OLD_BYTES) == 0
         && set_test_metadata(path) == 0 ? 0 : -1;
+}
+
+static void check_injected_failure_case(Fixture fixture,
+                                        const FailureCase *failure_case,
+                                        const char *path,
+                                        const char *directory,
+                                        const char *foreign)
+{
+    expect(prepare_failure_destination(path) == 0,
+           "old destination and metadata are ready");
+    start_injection(failure_case->injection);
+    ModelSaveResult result =
+        model_save_durable(fixture.model, fixture.tokenizer, path);
+    active_injection = INJECT_NONE;
+
+    char message[FAILURE_MESSAGE_CAPACITY];
+
+    snprintf(message, sizeof message, "%s failure reports its commit state",
+             failure_case->name);
+    expect(result == failure_case->expected, message);
+    snprintf(message, sizeof message, "%s failure point was reached",
+             failure_case->name);
+    expect(injection_hits == EXPECTED_INJECTION_HITS, message);
+
+    int committed = failure_case->expected
+                 == MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED;
+
+    snprintf(message, sizeof message,
+             "%s failure leaves the correct destination bytes",
+             failure_case->name);
+    expect(committed ? checkpoint_loads(path)
+                     : file_equals(path, OLD_BYTES, sizeof OLD_BYTES),
+           message);
+    snprintf(message, sizeof message,
+             "%s failure removes only its owned temporary file",
+             failure_case->name);
+    expect(directory_entry_count(directory)
+               == DESTINATION_AND_FOREIGN_ENTRIES
+               && file_equals(foreign, OLD_BYTES, sizeof OLD_BYTES),
+           message);
+}
+
+static void check_absent_rename_failure(Fixture fixture,
+                                        const char *path,
+                                        const char *directory,
+                                        const char *foreign)
+{
+    unlink(path);
+    start_injection(INJECT_RENAME);
+    ModelSaveResult result =
+        model_save_durable(fixture.model, fixture.tokenizer, path);
+    active_injection = INJECT_NONE;
+
+    expect(result == MODEL_SAVE_NOT_COMMITTED
+               && injection_hits == EXPECTED_INJECTION_HITS,
+           "no-replace rename failure reports not committed");
+    expect(access(path, F_OK) != 0 && errno == ENOENT,
+           "no-replace rename failure leaves no destination");
+    expect(directory_entry_count(directory) == FOREIGN_ENTRY_COUNT
+               && file_equals(foreign, OLD_BYTES, sizeof OLD_BYTES),
+           "no-replace rename failure removes its owned temporary file");
 }
 
 static void check_injected_save_failures(Fixture fixture,
@@ -580,53 +742,11 @@ static void check_injected_save_failures(Fixture fixture,
     expect(replace_with_bytes(foreign, OLD_BYTES, sizeof OLD_BYTES) == 0,
            "foreign temporary-looking file is ready");
 
-    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
-        expect(prepare_failure_destination(path) == 0,
-               "old destination and metadata are ready");
-        start_injection(CASES[i].injection);
-        ModelSaveResult result =
-            model_save_durable(fixture.model, fixture.tokenizer, path);
-        active_injection = INJECT_NONE;
+    for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++)
+        check_injected_failure_case(fixture, &CASES[i], path,
+                                    directory, foreign);
 
-        char message[160];
-        snprintf(message, sizeof message, "%s failure reports its commit state",
-                 CASES[i].name);
-        expect(result == CASES[i].expected, message);
-        snprintf(message, sizeof message, "%s failure point was reached",
-                 CASES[i].name);
-        expect(injection_hits == 1, message);
-
-        int committed =
-            CASES[i].expected
-            == MODEL_SAVE_COMMITTED_DURABILITY_UNCONFIRMED;
-
-        snprintf(message, sizeof message,
-                 "%s failure leaves the correct destination bytes",
-                 CASES[i].name);
-        expect(committed ? checkpoint_loads(path)
-                         : file_equals(path, OLD_BYTES, sizeof OLD_BYTES),
-               message);
-        snprintf(message, sizeof message,
-                 "%s failure removes only its owned temporary file",
-                 CASES[i].name);
-        expect(directory_entry_count(directory) == 2
-                   && file_equals(foreign, OLD_BYTES, sizeof OLD_BYTES),
-               message);
-    }
-
-    unlink(path);
-    start_injection(INJECT_RENAME);
-    ModelSaveResult absent_rename =
-        model_save_durable(fixture.model, fixture.tokenizer, path);
-    active_injection = INJECT_NONE;
-    expect(absent_rename == MODEL_SAVE_NOT_COMMITTED
-               && injection_hits == 1,
-           "no-replace rename failure reports not committed");
-    expect(access(path, F_OK) != 0 && errno == ENOENT,
-           "no-replace rename failure leaves no destination");
-    expect(directory_entry_count(directory) == 1
-               && file_equals(foreign, OLD_BYTES, sizeof OLD_BYTES),
-           "no-replace rename failure removes its owned temporary file");
+    check_absent_rename_failure(fixture, path, directory, foreign);
 
     unlink(foreign);
 }
@@ -667,7 +787,7 @@ static void check_fmemopen_failure(Fixture fixture, const char *path)
            "memory-stream failure fixture saves");
 
     start_injection(INJECT_FMEMOPEN);
-    Tokenizer *tokenizer = (Tokenizer *)1;
+    Tokenizer *tokenizer = fixture.tokenizer;
     Model *model = model_load(&tokenizer, path);
     active_injection = INJECT_NONE;
 
@@ -771,7 +891,7 @@ static void check_writer_golden(const char *path)
         .layer_count = 1,
         .batch_size  = 1,
     };
-    Model *model = model_new(config, 1337);
+    Model *model = model_new(config, GOLDEN_MODEL_SEED);
     ModelParams params = model_params(model);
     size_t scalar = 0;
 
@@ -779,11 +899,14 @@ static void check_writer_golden(const char *path)
         Mat values = param_values(params.params[p]);
 
         for (size_t i = 0; i < mat_size(values); i++) {
-            values.vals[i] = ((int)(scalar % 17) - 8) * 0.125f;
+            values.vals[i] =
+                ((int)(scalar % GOLDEN_VALUE_PERIOD) - GOLDEN_VALUE_CENTER)
+                * GOLDEN_VALUE_SCALE;
             scalar++;
         }
     }
-    expect(scalar == 20, "golden fixture has 20 parameter scalars");
+    expect(scalar == GOLDEN_PARAMETER_SCALARS,
+           "golden fixture has 20 parameter scalars");
     expect(model_save_durable(model, tokenizer, path)
                == MODEL_SAVE_DURABLE,
            "golden checkpoint saves durably");
@@ -808,6 +931,24 @@ static void check_writer_golden(const char *path)
     tokenizer_free(tokenizer);
 }
 
+static int checkpoint_failure_paths(const char *directory,
+                                    CheckpointFailurePaths *paths)
+{
+    return join_path(paths->metadata, sizeof paths->metadata,
+                     directory, "metadata.bin") != 0
+        || join_path(paths->snapshot, sizeof paths->snapshot,
+                     directory, "snapshot.bin") != 0
+        || join_path(paths->registry, sizeof paths->registry,
+                     directory, "registry.bin") != 0
+        || join_path(paths->identity, sizeof paths->identity,
+                     directory, "identity.bin") != 0
+        || join_path(paths->golden, sizeof paths->golden,
+                     directory, "golden.bin") != 0
+        || join_path(paths->fmemopen, sizeof paths->fmemopen,
+                     directory, "fmemopen.bin") != 0
+        ? -1 : 0;
+}
+
 int main(void)
 {
     char directory[] = "/tmp/tiny-agenc-checkpoint-failures-XXXXXX";
@@ -817,25 +958,9 @@ int main(void)
         return EXIT_FAILURE;
     }
 
-    char metadata_path[PATH_MAX];
-    char snapshot_path[PATH_MAX];
-    char registry_path[PATH_MAX];
-    char identity_path[PATH_MAX];
-    char golden_path[PATH_MAX];
-    char fmemopen_path[PATH_MAX];
+    CheckpointFailurePaths paths;
 
-    if (join_path(metadata_path, sizeof metadata_path, directory,
-                  "metadata.bin") != 0
-        || join_path(snapshot_path, sizeof snapshot_path, directory,
-                     "snapshot.bin") != 0
-        || join_path(registry_path, sizeof registry_path, directory,
-                     "registry.bin") != 0
-        || join_path(identity_path, sizeof identity_path, directory,
-                     "identity.bin") != 0
-        || join_path(golden_path, sizeof golden_path, directory,
-                     "golden.bin") != 0
-        || join_path(fmemopen_path, sizeof fmemopen_path, directory,
-                     "fmemopen.bin") != 0) {
+    if (checkpoint_failure_paths(directory, &paths) != 0) {
         fprintf(stderr, "checkpoint failure: temporary path is too long\n");
         rmdir(directory);
         return EXIT_FAILURE;
@@ -843,15 +968,15 @@ int main(void)
 
     Fixture fixture = fixture_new();
 
-    check_metadata_round_trip(fixture, metadata_path);
-    unlink(metadata_path);
+    check_metadata_round_trip(fixture, paths.metadata);
+    unlink(paths.metadata);
     check_rejected_destinations(fixture, directory);
     check_injected_save_failures(fixture, directory);
-    check_immutable_load_snapshot(fixture, snapshot_path);
-    check_fmemopen_failure(fixture, fmemopen_path);
-    check_registry_preflight(fixture, registry_path);
-    check_temporary_identity(fixture, directory, identity_path);
-    check_writer_golden(golden_path);
+    check_immutable_load_snapshot(fixture, paths.snapshot);
+    check_fmemopen_failure(fixture, paths.fmemopen);
+    check_registry_preflight(fixture, paths.registry);
+    check_temporary_identity(fixture, directory, paths.identity);
+    check_writer_golden(paths.golden);
 
     fixture_free(fixture);
     expect(directory_entry_count(directory) == 0,

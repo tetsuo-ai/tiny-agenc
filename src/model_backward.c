@@ -2,6 +2,9 @@
 
 #include "model_internal.h"
 
+static void block_backward(const Model *m, Block *b, Mat stream,
+                           Mat d_stream, int batch, int time);
+
 static void block_backward(const Model *m, Block *b, Mat stream, Mat d_stream,
                            int batch, int time)
 {
