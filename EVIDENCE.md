@@ -318,11 +318,24 @@ aggregate is:
 
 A follow-up separated `main` into runtime setup, top-level command-line
 dispatch, and subcommand dispatch. Repeating the one-step, 50-step, and
-sampling replay still produced the four hashes above. The current source
-aggregate is:
+sampling replay still produced the four hashes above. The source
+aggregate after that split was:
 
 ```text
 ed9610c653190444cb7186ce550c48fc8127a6e6c149844f815939199b4c1e07
+```
+
+A machine-legibility pass on `checkpoint.c` then added contract
+comments, struct invariants, and internal assertions, extracted the
+shared inode-identity comparison and per-stage xattr application into
+named helpers, and single-sourced the temporary-name prefix. The TAGC
+version 1 bytes and operation order are unchanged. Repeating the
+one-step, 50-step, and sampling replay on GCC 13.3.0 with OpenMP
+disabled and the default `-O3 -ffast-math` flags still produced the
+four hashes above. The current source aggregate is:
+
+```text
+88abe06c24763756c3e2b02ec5dfe809a88482754dad3fa72d03f06a3fc30253
 ```
 
 ## Full-corpus showcase
